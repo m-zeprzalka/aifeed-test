@@ -10,6 +10,7 @@ import {
 } from "@/lib/data";
 import { jsonLdScript } from "@/lib/jsonld";
 import { homeMetadata } from "@/lib/seo";
+import { shouldOptimize } from "@/lib/images/optimized-host";
 
 // Home metadata pochodzi z centralnego helpera `lib/seo.ts`. Używa
 // `title.absolute` żeby ominąć template z root layoutu (uniknięcie "AiFeed |
@@ -145,6 +146,7 @@ export default async function HomePage() {
                             className="object-cover transition-transform duration-700 ease-out group-hover:scale-[1.03]"
                             sizes="(max-width: 768px) 50vw, 25vw"
                             loading={idx === 0 ? "eager" : "lazy"}
+                            unoptimized={!shouldOptimize(article.thumbnail_url)}
                           />
                         ) : (
                           <div className="h-full w-full bg-gradient-to-br from-muted to-muted/50" />

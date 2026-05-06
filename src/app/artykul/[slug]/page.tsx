@@ -13,6 +13,7 @@ import { siteConfig } from "@/config/site";
 import { jsonLdScript } from "@/lib/jsonld";
 import { slugifyHeading } from "@/lib/heading-id";
 import { articleMetadata, notFoundMetadata } from "@/lib/seo";
+import { shouldOptimize } from "@/lib/images/optimized-host";
 import type { Metadata } from "next";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -174,6 +175,7 @@ export default async function ArticlePage({ params }: PageProps) {
                 className="object-cover"
                 sizes="(max-width: 768px) 100vw, 896px"
                 priority
+                unoptimized={!shouldOptimize(article.thumbnail_url)}
               />
             </div>
             {article.thumbnail_source && article.source_urls[0] && (

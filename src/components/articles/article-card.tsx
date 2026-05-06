@@ -2,6 +2,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { Clock } from "lucide-react";
 import type { Article, Category, Tag } from "@/types/database";
+import { shouldOptimize } from "@/lib/images/optimized-host";
 
 interface ArticleCardProps {
   article: Article & { category: Category | null; tags: Tag[] };
@@ -41,6 +42,7 @@ function FeaturedCard({ article, className, priority = true }: { article: Articl
             sizes="(max-width: 768px) 100vw, 60vw"
             priority={priority}
             quality={85}
+            unoptimized={!shouldOptimize(article.thumbnail_url)}
           />
         ) : (
           <div className="h-full w-full bg-gradient-to-br from-primary/20 via-accent/10 to-muted" />
@@ -97,6 +99,7 @@ function DefaultCard({ article, className, priority = false }: { article: Articl
             className="object-cover transition-transform duration-700 ease-out group-hover:scale-[1.03]"
             sizes="(max-width: 768px) 100vw, 33vw"
             priority={priority}
+            unoptimized={!shouldOptimize(article.thumbnail_url)}
           />
         ) : (
           <div className="h-full w-full bg-gradient-to-br from-muted to-muted/50" />
@@ -137,7 +140,7 @@ function CompactCard({ article, className }: { article: ArticleCardProps["articl
     >
       <div className="relative size-24 shrink-0 overflow-hidden rounded-lg bg-muted">
         {article.thumbnail_url ? (
-          <Image src={article.thumbnail_url} alt={article.title} fill className="object-cover" sizes="96px" />
+          <Image src={article.thumbnail_url} alt={article.title} fill className="object-cover" sizes="96px" unoptimized={!shouldOptimize(article.thumbnail_url)} />
         ) : (
           <div className="h-full w-full bg-gradient-to-br from-muted to-muted/50" />
         )}

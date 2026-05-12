@@ -3,11 +3,10 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   reactCompiler: true,
   images: {
-    // Next.js 16 requires every quality value used by `<Image quality={N}>`
-    // to be listed here — otherwise the build/runtime warns. We bump the
-    // hero/featured image to 85 (audit 4.9) and keep the default 75 for
-    // everything else.
-    qualities: [75, 85],
+    // Image optimization (`/_next/image`) is disabled globally. Vercel's
+    // optimizer was re-encoding scraped thumbnails into broken/blank outputs
+    // for some sources, so we serve every image as-is from its origin URL.
+    unoptimized: true,
     remotePatterns: [
       // Supabase Storage
       { protocol: "https", hostname: "iwseooszjbafasmjdiki.supabase.co" },

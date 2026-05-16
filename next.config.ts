@@ -1,5 +1,22 @@
 import type { NextConfig } from "next";
 
+// Wyciągamy hostname z `NEXT_PUBLIC_SUPABASE_URL` (jeśli ustawione w env
+// na czas build/runtime), żeby precyzyjnie zezwolić Next/Image na nasz
+// projekt Storage. Brak env nie wywala builda — `*.supabase.co` (poniżej
+// w `remotePatterns`) i tak pokrywa każdy projekt na hostingu Supabase.
+function parseSupabaseHostname(): { protocol: "https"; hostname: string }[] {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (!url) return [];
+  try {
+    const { hostname } = new URL(url);
+    return [{ protocol: "https" as const, hostname }];
+  } catch {
+    return [];
+  }
+}
+
+const supabaseRemotePatterns = parseSupabaseHostname();
+
 const nextConfig: NextConfig = {
   reactCompiler: true,
   images: {
@@ -8,8 +25,11 @@ const nextConfig: NextConfig = {
     // for some sources, so we serve every image as-is from its origin URL.
     unoptimized: true,
     remotePatterns: [
-      // Supabase Storage
-      { protocol: "https", hostname: "iwseooszjbafasmjdiki.supabase.co" },
+      // Supabase Storage — domena rozwiązywana z env w runtime (kasujemy
+      // hardcoded ref projektu z kodu); fallback `*.supabase.co` pokrywa
+      // każdy projekt na hostingu Supabase nawet bez ustawionej zmiennej.
+      ...supabaseRemotePatterns,
+      { protocol: "https", hostname: "*.supabase.co" },
       // Common source domains
       { protocol: "https", hostname: "*.techcrunch.com" },
       { protocol: "https", hostname: "*.theverge.com" },

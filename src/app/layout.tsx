@@ -106,6 +106,18 @@ export const viewport: Viewport = {
   ],
 };
 
+// Origin Supabase Storage pobrany z env. `null` gdy brak zmiennej (lokalny
+// dev bez supabase) — preconnect jest wtedy pomijany w <head> niżej.
+const supabaseOrigin = (() => {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (!url) return null;
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+})();
+
 // Module-level constant — derived purely from `siteConfig`, no per-request
 // state. `sameAs` is intentionally omitted: it should only list verified,
 // owned social profiles (none yet). Pointing schema.org at 404s damages
@@ -140,11 +152,13 @@ export default async function RootLayout({
     >
       <head>
         {/* Preconnect to Supabase Storage — every article hero image hits this
-            host. Saves DNS + TLS handshake on the LCP image. preconnect alone
-            is sufficient for all modern browsers (Chrome/Firefox/Safari/Edge
-            since ~2017); dns-prefetch fallback kept around in old SEO guides
-            is now redundant. */}
-        <link rel="preconnect" href="https://iwseooszjbafasmjdiki.supabase.co" />
+            host. Saves DNS + TLS handshake on the LCP image. Host pobierany
+            z `NEXT_PUBLIC_SUPABASE_URL` (nigdy nie hardcoded — zob. P0-1
+            w AUDIT.md). Bez zmiennej preconnect jest pomijany. preconnect
+            alone wystarczy w nowoczesnych przeglądarkach (Chrome/Firefox/
+            Safari/Edge od ~2017); dns-prefetch fallback ze starszych poradników
+            jest dziś zbędny. */}
+        {supabaseOrigin && <link rel="preconnect" href={supabaseOrigin} />}
 
         <script
           type="application/ld+json"

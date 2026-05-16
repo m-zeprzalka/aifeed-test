@@ -44,3 +44,12 @@ next-env.d.ts
 # claude code local state
 .claude/
 .env*.local
+
+# Supabase CLI local state — zawiera project ref, pooler URL i wersje
+# wtyczek dla zalinkowanego projektu. Nigdy nie commitować.
+supabase/.temp/
+supabase/.branches/
+
+# Lokalne skrypty z sekretami / dane jednorazowe — wzorzec
+# pozwala na pliki dev-only typu `scripts/foo.local.mjs`.
+scripts/*.local.*

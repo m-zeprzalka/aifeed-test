@@ -11,6 +11,18 @@ import slugify from "slugify";
 export const maxDuration = 300;
 export const dynamic = "force-dynamic";
 
+// Vercel Hobby max function duration = 300s. Per-artykuł budget w worst case
+// (scrape 15s + AI 90s + thumbnail og 10s lub AI 90s + DB ops) potrafi sięgać
+// 200s. Bez time-budget guard pętla potrafi zostać cięta w połowie iteracji,
+// zostawiając stan w nieprzewidywalnym miejscu (insert mógł przejść, ale
+// upsert tagów już nie). Po przekroczeniu BUDGET_MS przerywamy pętlę
+// gracefully — pozostałe items lądują w `aborted[]` w response, a `scraped_items`
+// dla nich NIE są oznaczone jako processed (retry w następnym cronie).
+//
+// Bufor 30s (300 - 270) zostaje na: ostatni insert + final response stringify
+// + serverless cold-finish.
+const PIPELINE_BUDGET_MS = 270_000;
+
 /**
  * Generate a unique slug for the article. Prefers a clean, human-readable slug;
  * falls back to a short timestamp suffix only when the base slug collides.
@@ -34,6 +46,8 @@ async function runPipeline(request: NextRequest) {
   if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  const runStartedAt = Date.now();
 
   try {
     const supabase = createAdminClient();
@@ -69,6 +83,7 @@ async function runPipeline(request: NextRequest) {
     const generated: string[] = [];
     const rejected: string[] = [];
     const failed: { title: string; reason: string }[] = [];
+    const aborted: string[] = [];
 
     // Editorial featured-article gating: at most ONE featured per UTC day, and
     // only when the AI quality score is ≥ 80 (excellent, not just passing).
@@ -84,7 +99,21 @@ async function runPipeline(request: NextRequest) {
       .gte("published_at", startOfTodayUtc.toISOString());
     let canFeatureThisRun = (featuredToday || 0) === 0;
 
-    for (const item of topItems) {
+    for (let i = 0; i < topItems.length; i++) {
+      // Time-budget guard — patrz komentarz przy PIPELINE_BUDGET_MS. Items
+      // NIEoznaczone jako processed → retry w kolejnym cronie (idempotent dedup
+      // po `source_url` na `scraped_items`).
+      const elapsed = Date.now() - runStartedAt;
+      if (elapsed > PIPELINE_BUDGET_MS) {
+        const remaining = topItems.slice(i).map((it) => it.title);
+        aborted.push(...remaining);
+        console.warn(
+          `[Pipeline] Time budget wyczerpany po ${Math.round(elapsed / 1000)}s — przerywam, ${remaining.length} items wraca do kolejki`
+        );
+        break;
+      }
+
+      const item = topItems[i];
       try {
         console.log(`Generating article for: ${item.title}`);
 
@@ -221,13 +250,16 @@ async function runPipeline(request: NextRequest) {
       }
     }
 
+    const durationMs = Date.now() - runStartedAt;
     return Response.json({
-      message: `Generated ${generated.length} articles`,
+      message: `Generated ${generated.length} articles${aborted.length > 0 ? ` (${aborted.length} aborted)` : ""}`,
       generated,
       rejected,
       failed,
+      aborted,
       scraped: scrapedItems.length,
       new: newItems.length,
+      duration_ms: durationMs,
     });
   } catch (error) {
     console.error("Pipeline error:", error);

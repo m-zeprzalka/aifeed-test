@@ -1,8 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
-import { rateLimit } from "@/lib/rate-limit";
-
-const RATE_LIMIT = { limit: 5, windowMs: 60_000 }; // 5 req/min per IP
+import { checkRateLimit } from "@/lib/rate-limit";
 
 export async function POST(request: Request) {
   try {
@@ -10,7 +8,9 @@ export async function POST(request: Request) {
       || request.headers.get("x-real-ip")
       || "unknown";
 
-    const { allowed } = rateLimit(`newsletter:${ip}`, RATE_LIMIT);
+    // Limit (5 req/min/IP) jest zdefiniowany centralnie w `LIMITS` w
+    // `src/lib/rate-limit.ts` — tu trzymamy tylko typ klucza.
+    const { allowed } = await checkRateLimit("newsletter", ip);
     if (!allowed) {
       return NextResponse.json(
         { error: "Zbyt wiele prób. Spróbuj za chwilę." },

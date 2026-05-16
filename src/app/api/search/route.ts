@@ -1,16 +1,16 @@
 import { NextRequest } from "next/server";
 import { searchArticles } from "@/lib/data";
-import { rateLimit } from "@/lib/rate-limit";
+import { checkRateLimit } from "@/lib/rate-limit";
 import { SEARCH_QUERY_MAX_LENGTH } from "@/lib/search-utils";
-
-const RATE_LIMIT = { limit: 30, windowMs: 60_000 }; // 30 req/min per IP
 
 export async function GET(request: NextRequest) {
   const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
     || request.headers.get("x-real-ip")
     || "unknown";
 
-  const { allowed, remaining, resetAt } = rateLimit(`search:${ip}`, RATE_LIMIT);
+  // Limit (30 req/min/IP) zdefiniowany centralnie w `LIMITS` w
+  // `src/lib/rate-limit.ts`.
+  const { allowed, remaining, resetAt } = await checkRateLimit("search", ip);
 
   if (!allowed) {
     return Response.json(

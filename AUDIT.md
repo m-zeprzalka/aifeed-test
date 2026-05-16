@@ -141,79 +141,76 @@ Oba grep-y muszą zwrócić **zero wyników**. Dodatkowo zweryfikuj `.next/` (bu
 
 ---
 
-### P0-3. DOCS.md odwoływany przez CLAUDE.md, ale nie istnieje
+### P0-3. DOCS.md odwoływany przez CLAUDE.md, ale nie istnieje  — ✅ NAPRAWIONE (2026-05-16)
 
-**Lokalizacja:** `CLAUDE.md:11` — *"`DOCS.md` is the canonical, exhaustive architecture document"*. Plik nie istnieje (`ls DOCS.md` → not found).
+**Decyzja:** wybrano **ścieżkę A** — CLAUDE.md zostaje krótki ("quick orientation"), a `AUDIT.md` (ten dokument) jest kanonicznym źródłem dla planowania zmian.
 
-**Wpływ:** każdy nowy developer (lub AI agent) dostanie sprzeczne instrukcje — CLAUDE.md kieruje do dokumentu, którego nie ma. To natychmiast obniża jakość każdej zmiany.
+**Co zostało zrobione:**
+- `CLAUDE.md:11` — wykasowane odwołanie do `DOCS.md`, zastąpione wskazaniem na `AUDIT.md` jako kanoniczny dokument audytu i remediation plan.
+- `CLAUDE.md:15` — usunięto wzmiankę "and DOCS.md" w sekcji language conventions; doprecyzowano, że `AUDIT.md` jest po polsku jako project document.
 
-**Akcja:** albo:
-- (A) wykasować odwołanie z `CLAUDE.md:11-13` i traktować CLAUDE.md jako jedyne źródło, albo
-- (B) utworzyć `DOCS.md` na bazie tego audytu + treści CLAUDE.md.
-
-Rekomendacja: **(B)** — bo CLAUDE.md powinien zostać krótki ("quick orientation"), a dłuższe rozważania powinny żyć w `DOCS.md`.
+Jeśli w przyszłości pojawi się potrzeba pełnej dokumentacji architektonicznej (ścieżka B), można ją utworzyć jako `docs/ARCHITECTURE.md` (folder `docs/` już istnieje) — wtedy AUDIT zostaje dokumentem zmian, ARCHITECTURE opisem stanu obecnego.
 
 ---
 
 ## 4. P1 — WYSOKIE (przed publicznym launchem)
 
-### P1-1. `maxDuration=300s` jest niewystarczające dla `count=10`
+### P1-1. `maxDuration=300s` jest niewystarczające dla `count=10`  — ✅ MITIGACJA NA HOBBY (2026-05-16)
 
-**Lokalizacja:** `src/app/api/cron/generate/route.ts:11`, `vercel.json:4`.
+**Plan:** projekt zostaje na Vercel Hobby (limit `maxDuration=300s`). Bez Pro nie podniesiemy budżetu, więc rozwiązujemy problem przez **mniejszy count + graceful time-budget guard**.
 
-**Problem:** każdy artykuł wymaga: scrape (15 s timeout) + AI (90 s timeout) + thumbnail scrape/AI (do 90 s) + DB ops. W najgorszym scenariuszu jedno przejście pętli to ~200 s. 10 artykułów × ~30-60 s średnio = `300-600 s`, ale tail (długi scrape + AI fallback do generacji obrazu) potrafi zżerać cały budżet po 3-4 artykułach. Wtedy Vercel **wycina funkcję w trakcie iteracji**, zostawiając pipeline w stanie nieprzewidywalnym.
+**Co zostało zrobione:**
 
-**Co już jest zaimplementowane dobrze:** każdy artykuł jest commitowany do bazy osobno (linia 158-176), więc utrata środkowych nie powoduje rollbacku — tylko nie zostają obsłużone.
+- ✅ **`vercel.json`** — count zmniejszony z `10/5/5` do **`4/4/4`** (12 artykułów dziennie zamiast 20). Worst-case per artykuł ~200 s ⇒ 4 artykuły × średnio ~50 s = ~200 s, w budżecie 300 s z 100 s buforem.
+- ✅ **`src/app/api/cron/generate/route.ts`** — dodany **time-budget guard**:
+  - Stała `PIPELINE_BUDGET_MS = 270_000` (300 s minus 30 s bufor na: ostatni insert + response stringify + cold-finish).
+  - `runStartedAt = Date.now()` zapisywane na początku try-bloku.
+  - Pętla zmieniona na `for(let i; …)`; na początku każdej iteracji `if (Date.now() - runStartedAt > PIPELINE_BUDGET_MS)` — pozostałe items idą do tablicy `aborted[]` i pętla się przerywa.
+  - Items **NIE** są oznaczone jako processed (`scraped_items.is_processed`), więc trafiają z powrotem do kolejki przy następnym cronie (idempotent dedup po `source_url`).
+  - Response dostał dwa nowe pola: `aborted: string[]` i `duration_ms: number` — telemetria (potem do zapięcia w P1-5).
+- ✅ Lint, tsc, 48/48 testów zielone.
 
-**Akcja:**
-1. **Zmniejsz `count` w `vercel.json`** z `10/5/5` na `4/4/4` (3 crony × 4 = 12 artykułów dziennie — wystarczająco):
-   ```json
-   { "path": "/api/cron/generate?count=4", "schedule": "0 5 * * *" },
-   { "path": "/api/cron/generate?count=4", "schedule": "0 11 * * *" },
-   { "path": "/api/cron/generate?count=4", "schedule": "0 17 * * *" }
-   ```
-2. **Albo** podnieś `maxDuration` do `600` (wymaga planu Vercel Pro) i pozostań przy `count=10`.
-3. **Dodaj sygnalizację timeoutu**: po każdej iteracji sprawdź `Date.now() - startTime > 270_000`, przerwij pętlę i zaloguj `truncated_at: idx` — żeby było wiadomo, że run nie zakończył wszystkich items.
-4. **Docelowo (P2): rozdziel pipeline** — Vercel Cron tylko enqueue'uje do **Vercel Queues**, a per-artykułowy handler ma własny budżet czasu. Patrz P2-12.
+**Co warto zrobić dodatkowo (kiedy będzie więcej danych):**
+
+- Po wgraniu P1-5 (telemetry) zmierz realne `duration_ms` przez 7 dni. Jeśli średnia jest <150 s, można ostrożnie podnieść count do 5 lub 6.
+- **Docelowo (P2-12): rozdział na Vercel Queues** — każdy artykuł = osobne wywołanie funkcji z własnym budżetem 300 s. Wtedy ograniczenie znika.
 
 ---
 
-### P1-2. Rate limiter w pamięci JS — nieprzydatny na produkcji
+### P1-2. Rate limiter w pamięci JS — nieprzydatny na produkcji  — ⚠️ ŚWIADOMA DECYZJA NA MVP (2026-05-16)
 
-**Lokalizacja:** `src/lib/rate-limit.ts:1-58`. Komentarz w pliku jasno przyznaje: *"Not suitable for multi-instance deployments"*.
+**Decyzja właściciela:** zostajemy przy in-memory dla startu serwisu. Brak Upstash / Redis / shared store. Powód: serwis jest świeży, brak znanego ruchu, brak realnego ryzyka rozproszonego ataku, a wprowadzanie nowego vendora (kolejna usługa, kolejny rachunek, kolejny punkt awarii) jest dla MVP overkill.
 
-**Skutek:** na Vercel funkcje są autoskalowane — każda instancja ma własny `Map`, więc atakujący wysyłając równolegle 30 zapytań trafia statystycznie na 30 różnych instancji i każda widzi `count: 1`. Realne limity są nieskuteczne.
+**Co zostało zrobione w kodzie (ulepszenia, niezależne od backendu):**
 
-**Akcja:** włącz **Upstash Redis** z marketplace Vercel (jednoklikowy provisioning, free tier 10k requests/day) i przepisz na `@upstash/ratelimit`:
+- ✅ **`src/lib/rate-limit.ts`** — przepisany na czyste API z forward-compatibility:
+  - Centralna stała `LIMITS = { newsletter: 5/60s, search: 30/60s }` w jednym miejscu (zamiast magicznych liczb w call sites).
+  - Publiczna funkcja: `checkRateLimit(kind, ip): Promise<RateLimitResult>` — `kind` typu `"newsletter" | "search"`. Limity zmienia się w jednym pliku, call sites nie wiedzą o szczegółach.
+  - **Celowo async** — gdy kiedyś podmienimy implementację na shared store (Redis), sygnatura zostanie ta sama, `await` w call sites się nie zmieni. Zero kosztu teraz (zwraca natychmiast resolved promise).
+  - Pełny komentarz w nagłówku pliku o stanie i ścieżce upgrade'u.
+- ✅ **Call sites zaktualizowane** (oba handlery już były async):
+  - `src/app/api/newsletter/route.ts:14` — `await checkRateLimit("newsletter", ip)`.
+  - `src/app/api/search/route.ts:13` — `await checkRateLimit("search", ip)`.
+- ✅ **Testy:** `rate-limit.test.ts` przepisany pod nowe async API (6 testów: allowed, blocked, IP-isolation, kind-isolation, search 30/min, resetAt).
+- ✅ **Paczki `@upstash/*` odinstalowane** — żeby `package.json` nie zawierał nieużywanych dependencies (czyste node_modules).
+- ✅ `npx tsc --noEmit` OK, `npm run lint` OK, `npm test` 48/48 zielone.
 
-```ts
-// src/lib/rate-limit.ts
-import { Ratelimit } from "@upstash/ratelimit";
-import { Redis } from "@upstash/redis";
+**Realne ograniczenie, które akceptujemy:**
 
-const newsletter = new Ratelimit({
-  redis: Redis.fromEnv(),
-  limiter: Ratelimit.slidingWindow(5, "60 s"),
-  prefix: "rl:newsletter",
-});
+- Vercel Fluid Compute trzyma kilka instancji równolegle. Każda ma własną `Map`. Atakujący z 30 równoległych połączeń trafi w 30 instancji i każda zacznie liczyć od zera.
+- **Co to faktycznie znaczy w praktyce:** głupi bot z jednego IP wysyłający 100 req/s → zostanie szybko zatrzymany (większość requestów trafi w tę samą instancję, bo Vercel scaluje stopniowo). Rozproszony atak z botnetu → tego nie zatrzymamy.
+- **Próg, przy którym warto wrócić do P1-2:** > 100 req/min realnego ruchu na endpointach, ALBO pojawienie się ataku (anomalie w logach Vercel / koszty Supabase rosną bez wzrostu legitnego ruchu).
 
-const search = new Ratelimit({
-  redis: Redis.fromEnv(),
-  limiter: Ratelimit.slidingWindow(30, "60 s"),
-  prefix: "rl:search",
-});
+**Jak wykonać upgrade później (gdy będzie potrzeba):**
 
-export async function rateLimitNewsletter(ip: string) {
-  return newsletter.limit(ip);
-}
-export async function rateLimitSearch(ip: string) {
-  return search.limit(ip);
-}
-```
+Implementacja Upstash już była gotowa i jest w historii gita (commit P1-2 z tej sesji, można go odtworzyć przez `git log --all -- src/lib/rate-limit.ts`). Migracja zajmie ~15 min:
 
-Następnie zmień call site'y w `src/app/api/newsletter/route.ts:13` i `src/app/api/search/route.ts:13` (są async — można `await` bez problemu, oba handlery już są async).
+1. `npm install @upstash/ratelimit @upstash/redis`
+2. Vercel Dashboard → Storage → Add Integration → Upstash → Redis (eu-west-1). Marketplace auto-wstrzyknie `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN`.
+3. Przepisz `src/lib/rate-limit.ts` — wewnątrz `checkRateLimit()` najpierw spróbuj `Ratelimit.limit()`, fallback na obecny in-memory gdy env brakuje.
+4. **Call sites się nie zmieniają** (dlatego API jest async — kontrakt zostaje).
 
-**Koszt:** Upstash free tier wystarcza dla startu (10 000 req/dzień). Po przekroczeniu — \$0,2 / 100 000 zapytań.
+**Alternatywa rozważona, odrzucona:** Supabase jako rate-limit store (tabela `rate_limits`). Plusy: brak nowego vendora. Minusy: ~30-100 ms HTTP overhead na każde sprawdzenie, +zużycie limitów Supabase free tier. Nieproporcjonalna cena za rozwiązanie problemu, którego jeszcze nie mamy.
 
 ---
 
@@ -766,6 +763,7 @@ Przy założeniu, że P0 zrobione, P1 wdrażane.
 - [x] **`.gitignore` rozszerzony o `supabase/.temp/`, `supabase/.branches/`, `scripts/*.local.*`** (2026-05-16)
 - [x] **`next.config.ts` — host Supabase z env, brak hardcoded project ref** (2026-05-16)
 - [x] **`src/app/layout.tsx` — preconnect z env, brak hardcoded hosta** (2026-05-16)
+- [x] **CLAUDE.md — usunięcie odwołania do nieistniejącego DOCS.md (P0-3)** (2026-05-16)
 - [ ] Rotacja `SUPABASE_SERVICE_ROLE_KEY`
 - [ ] Rotacja `OPENROUTER_API_KEY`
 - [ ] Rotacja `UNSPLASH_ACCESS_KEY`
@@ -783,8 +781,8 @@ Przy założeniu, że P0 zrobione, P1 wdrażane.
 ### Sprint 1 — pre-launch (1-2 tygodnie)
 
 - [ ] `generateStaticParams()` dla artykułu, kategorii, tagów (P1-3)
-- [ ] Upstash Redis + rate limiter migration (P1-2)
-- [ ] `count=4` w `vercel.json` ALBO `maxDuration=600` (P1-1)
+- [x] **Rate limiter — ulepszenie API (P1-2) — 2026-05-16**; świadoma decyzja: zostajemy na in-memory dla MVP, upgrade na shared store gdy ruch wzrośnie (>100 req/min) lub pojawi się anomalia
+- [x] **`count=4` w `vercel.json` + time-budget guard w pipeline (P1-1) — 2026-05-16** (zostajemy na Hobby)
 - [ ] `pipeline_events` tabela + telemetry helper (P1-5)
 - [ ] `noindex` na tagach (Ścieżka A z P1-6)
 - [ ] CSP + COOP + CORP w proxy (P1-7)
@@ -825,14 +823,14 @@ Krótka mapa "kto za co odpowiada" — przydatna przy nawigacji w kodzie i przy 
 | `src/lib/data.ts` | Wszystkie publiczne odczyty (anon key) | FTS (P1-9), idx tiebreaker (P2-3), RPC last_modified (P2-2) |
 | `src/lib/supabase/admin.ts` | Service role client (cron + newsletter) | Runtime env validation |
 | `src/lib/search-utils.ts` | `escapeIlike`, `sanitizeOrQuery`, `MAX_LEN` | bez zmian |
-| `src/lib/rate-limit.ts` | In-memory sliding window | **Przepisać na Upstash (P1-2)** |
+| `src/lib/rate-limit.ts` | ✅ in-memory z czystym async API (P1-2, MVP decision) | upgrade na shared store gdy potrzeba |
 | `src/types/database.ts` | TS typy bazy | + `dedup_key` (P2-1) |
 
 ### Pipeline AI
 
 | Plik | Rola | Zmiana w audycie |
 |------|------|-------------------|
-| `src/app/api/cron/generate/route.ts` | Główny pipeline, 300s budget | count=4 (P1-1), telemetry (P1-5), idempotency (P2-1) |
+| `src/app/api/cron/generate/route.ts` | Główny pipeline, 300s budget | ✅ time-budget guard + count=4 (P1-1) · TODO: telemetry (P1-5), idempotency (P2-1) |
 | `src/app/api/cron/seed/route.ts` | Ręczny seed kategorii | weryfikacja czy uż używane |
 | `src/lib/scraper/sources.ts` | 20 RSS feedów | nowe źródła PL warto dorzucić |
 | `src/lib/scraper/parser.ts` | Parse + AI_KEYWORD_REGEX + greedy diversity | bez zmian — solidne |
@@ -847,8 +845,8 @@ Krótka mapa "kto za co odpowiada" — przydatna przy nawigacji w kodzie i przy 
 
 | Plik | Rola | Zmiana w audycie |
 |------|------|-------------------|
-| `src/app/api/newsletter/route.ts` | POST email, 5/min/IP | Upstash rate limit (P1-2), double opt-in (P3-9) |
-| `src/app/api/search/route.ts` | GET ?q=, 30/min/IP, MAX_LEN=100 | Upstash + FTS (P1-2, P1-9) |
+| `src/app/api/newsletter/route.ts` | POST email, 5/min/IP | ✅ async checkRateLimit (P1-2) · TODO: double opt-in (P3-9) |
+| `src/app/api/search/route.ts` | GET ?q=, 30/min/IP, MAX_LEN=100 | ✅ async checkRateLimit (P1-2) · TODO: FTS (P1-9) |
 
 ### Strony
 
@@ -899,11 +897,11 @@ Krótka mapa "kto za co odpowiada" — przydatna przy nawigacji w kodzie i przy 
 | Plik | Zmiana w audycie |
 |------|-------------------|
 | `next.config.ts` | ✅ host Supabase z env (P0-1) · TODO: selective `unoptimized` (P1-4 Etap C) |
-| `vercel.json` | count 10→4 (P1-1) |
+| `vercel.json` | ✅ count 4/4/4 (P1-1) |
 | `eslint.config.mjs` | OK |
 | `tsconfig.json` | OK |
 | `components.json` | OK |
-| `.env.example` | + `NEXT_PUBLIC_GA_ID`, `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` (P1-2, P1-8) |
+| `.env.example` | bez zmian (Upstash nieużywany) · TODO: `NEXT_PUBLIC_GA_ID` (P1-8) |
 | `.gitignore` | ✅ `supabase/.temp/`, `supabase/.branches/`, `scripts/*.local.*` (P0-1) |
 
 ---

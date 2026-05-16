@@ -8,11 +8,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Production: `https://www.aifeed.pl` (Vercel project `aifeed-pl`).
 
-**`DOCS.md` is the canonical, exhaustive architecture document** — read it for the full picture (pipeline internals, RLS policies, scoring formulas, SEO/JSON-LD details, todo list). This file is a quick orientation, not a substitute.
+`AUDIT.md` (in the repo root) is the canonical audit and remediation plan — read it for the full picture of known issues, priorities, and architectural decisions. This file is a quick orientation, not a substitute.
 
 ## Language and content conventions
 
-- **All user-facing copy, AI-generated articles, commit messages, and DOCS.md are in Polish.** This is a hard requirement — the product is a Polish magazine. Code identifiers, comments-when-necessary, and CLAUDE.md/.env.example stay in English.
+- **All user-facing copy, AI-generated articles, and commit messages are in Polish.** This is a hard requirement — the product is a Polish magazine. Code identifiers, comments-when-necessary, and CLAUDE.md / `.env.example` stay in English. `AUDIT.md` is in Polish because it's a project document, not source.
 - URL slugs are Polish (`/artykul/[slug]`, `/kategoria/[slug]`, `/szukaj`, `/o-serwisie`, `/polityka-prywatnosci`). English equivalents (`/article`, `/category`, `/search`, `/about`, `/privacy`) are 301-redirected in `next.config.ts`. When adding routes, keep them Polish and add a 301 if the English form was ever public.
 
 ## Commands

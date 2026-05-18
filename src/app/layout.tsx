@@ -195,7 +195,13 @@ export default async function RootLayout({
           <Footer />
           <ScrollToTop />
         </ThemeProvider>
-        <GoogleAnalytics gaId="G-5SD17PTF0C" />
+        {/* GA renderowane wyłącznie gdy `NEXT_PUBLIC_GA_ID` jest ustawione
+            (Production na Vercelu). Preview/Development env tej zmiennej nie
+            mają, więc dev/preview NIE wysyła eventów do produkcyjnego property
+            — czyste raporty SEO bez zafałszowania przez testy lokalne. */}
+        {process.env.NEXT_PUBLIC_GA_ID && (
+          <GoogleAnalytics gaId={process.env.NEXT_PUBLIC_GA_ID} />
+        )}
         <Analytics />
       </body>
     </html>

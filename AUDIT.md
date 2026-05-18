@@ -363,51 +363,41 @@ Plus w `src/app/sitemap.ts:38-43` **usuń** tagi z sitemapy i w `src/app/robots.
 
 ---
 
-### P1-7. Brak Content-Security-Policy + brakujące security headers
+### P1-7. Brak Content-Security-Policy + brakujące security headers  — ✅ ZROBIONE (2026-05-18)
 
-**Lokalizacja:** `src/proxy.ts:1-24`.
+**Co zostało zrobione (CSP + COOP + CORP w warstwie edge proxy):**
 
-**Co jest:** HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy. **Brakuje:** CSP, COOP, CORP, COEP.
+- ✅ **`src/proxy.ts`** — stała `CSP` (10 dyrektyw) wstrzykiwana w każdym responsie. Komentarze przy każdej dyrektywie tłumaczą *dlaczego* (`'unsafe-inline'` dla Next/RSC inline scripts, `https:` w `img-src` dla scrape'owanych RSS-ów, `wss://*.supabase.co` na zapas pod Realtime). OpenRouter celowo **wycięty** z `connect-src` — pipeline woła go wyłącznie server-side, klientowi niepotrzebny (mniej powierzchni ataku).
+- ✅ **`Cross-Origin-Opener-Policy: same-origin`** — chroni przed Spectre-style cross-window leaks.
+- ✅ **`Cross-Origin-Resource-Policy: same-site`** — pozwala aifeed.pl ↔ www.aifeed.pl, blokuje resztę. Dotyczy wyłącznie *naszych* zasobów (header opisuje co MY serwujemy; RSS thumbnaile ładujemy sami z dowolnych origin'ów, ich to nie tyczy).
+- ❌ **COEP** świadomie pominięte — `require-corp` zepsułoby wszystkie obrazki z RSS (żaden z nich nie wysyła `Cross-Origin-Resource-Policy`).
+- ❌ **CSP `Report-Only`** świadomie pominięte — endpoint raportujący byłby kolejną powierzchnią; zamiast tego zrobiłem dokładny test stron przed wdrożeniem.
 
-**Akcja:**
+**Weryfikacja:**
+- ✅ `curl -sI https://www.aifeed.pl/ | grep -iE "content-security-policy|cross-origin-opener|cross-origin-resource"` → wszystkie 3 nagłówki obecne.
+- ✅ Home / artykuł / kategoria / tag / szukaj / admin → 200, brak zerwań w renderze, GA + Vercel Analytics ładują się poprawnie.
+- ✅ `npm run lint` 0/0, `npx tsc --noEmit` 0/0.
 
-```ts
-// src/proxy.ts — DODAJ przed `return response`:
-const csp = [
-  "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' https://www.googletagmanager.com https://va.vercel-scripts.com",
-  // 'unsafe-inline' bo Next emit'uje inline scripty (RSC payload, JSON-LD)
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob: https:",        // any HTTPS image (RSS thumbnails)
-  "font-src 'self' https://fonts.gstatic.com data:",
-  "connect-src 'self' https://*.supabase.co https://openrouter.ai https://www.google-analytics.com https://va.vercel-scripts.com",
-  "frame-ancestors 'none'",                    // duplikat X-Frame-Options DENY, ale CSP wygrywa
-  "base-uri 'self'",
-  "form-action 'self'",
-  "upgrade-insecure-requests",
-].join("; ");
-
-response.headers.set("Content-Security-Policy", csp);
-response.headers.set("Cross-Origin-Opener-Policy", "same-origin");
-response.headers.set("Cross-Origin-Resource-Policy", "same-origin");
-```
-
-**Uwaga:** każda zmiana CSP wymaga testu wszystkich stron + monitor `/api/csp-report` endpoint (lub bez raportowania, ale wtedy testować dokładnie).
+**Co dorobić w przyszłości (opcjonalnie):**
+- Migracja `'unsafe-inline'` w `script-src` na nonce-based CSP. Next 16 nie ma jeszcze stabilnego nonce streamingu przez App Router — czekamy aż dojrzeje.
+- Endpoint `/api/csp-report` zbierający `report-to` violations do `pipeline_events` lub Sentry, gdyby kiedyś chcieć zaostrzyć politykę bez ryzyka.
 
 ---
 
-### P1-8. Hardcoded GA ID w layout.tsx
+### P1-8. Hardcoded GA ID w layout.tsx  — ✅ ZROBIONE (2026-05-18)
 
-**Lokalizacja:** `src/app/layout.tsx:184` — `<GoogleAnalytics gaId="G-5SD17PTF0C" />`.
+**Co zostało zrobione:**
 
-**Problem:** stage/preview deployments i lokalny dev wysyłają eventy do tego samego property co produkcja → zafałszowane metryki, niedokładne CTR, błędne decyzje SEO.
+- ✅ **`src/app/layout.tsx:198-201`** — `<GoogleAnalytics />` renderowany tylko gdy `process.env.NEXT_PUBLIC_GA_ID` jest ustawione. Komentarz wyjaśnia że Production ma zmienną, Preview/Development jej nie mają → dev/preview nie wysyłają eventów do produkcyjnego property.
+- ✅ **Vercel env**: `NEXT_PUBLIC_GA_ID=G-5SD17PTF0C` dodane wyłącznie do **Production** (`vercel env add NEXT_PUBLIC_GA_ID production --value ... --yes`). Preview i Development celowo bez tej zmiennej.
+- ✅ Po redeployu (`vercel --prod`) prod HTML zawiera `<script src="https://www.googletagmanager.com/gtag/js?id=G-5SD17PTF0C">`, a preview deployments — nie.
 
-**Akcja:**
-```ts
-// src/app/layout.tsx:184:
-{process.env.NEXT_PUBLIC_GA_ID && <GoogleAnalytics gaId={process.env.NEXT_PUBLIC_GA_ID} />}
-```
-Dodaj `NEXT_PUBLIC_GA_ID=G-5SD17PTF0C` w **Production** env Vercel, **NIE** ustawiaj w Preview/Development.
+**Weryfikacja:**
+- ✅ `curl -sS https://www.aifeed.pl/ | grep -oE 'gtag/js\?id=[^"]+'` → `G-5SD17PTF0C`.
+- ✅ `npm run lint` 0/0, `npx tsc --noEmit` 0/0.
+
+**Bonus — porządek z CSP (P1-7):**
+`script-src` w CSP zawiera `https://www.googletagmanager.com`, więc warunkowa GA nie narusza polityki. Gdy zmienna jest brak (preview), brak skryptu w HTML → brak żądania → brak CSP-error w konsoli.
 
 ---
 

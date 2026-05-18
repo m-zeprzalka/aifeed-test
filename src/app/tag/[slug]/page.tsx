@@ -3,13 +3,27 @@ import { Hash } from "lucide-react";
 import { ArticleCard } from "@/components/articles/article-card";
 import { Breadcrumbs } from "@/components/articles/breadcrumbs";
 import { EmptyState } from "@/components/ui/empty-state";
-import { getTagBySlug, getArticlesByTag } from "@/lib/data";
+import { getTagBySlug, getArticlesByTag, getPopularTags } from "@/lib/data";
 import { siteConfig } from "@/config/site";
 import { jsonLdScript } from "@/lib/jsonld";
 import { tagMetadata, notFoundMetadata, buildItemListJsonLd } from "@/lib/seo";
 import type { Metadata } from "next";
 
 export const revalidate = 300;
+
+/**
+ * Pre-render top 100 najpopularniejszych tagów (≥ 1 użycie, posortowane
+ * przez `popular_tags` RPC). Reszta tagów (rzadkie, długi ogon) lecą
+ * przez on-demand ISR — i tak są thin content, więc niska priorytetowość.
+ *
+ * Uwaga: tag pages obecnie indexujemy normalnie; gdy zdecydujemy się na
+ * `noindex` (AUDIT.md P1-6, ścieżka A), `generateStaticParams` można
+ * zmniejszyć lub usunąć — Google i tak ich nie odwiedzi.
+ */
+export async function generateStaticParams() {
+  const tags = await getPopularTags(100);
+  return tags.map((t) => ({ slug: t.slug }));
+}
 
 interface PageProps {
   params: Promise<{ slug: string }>;

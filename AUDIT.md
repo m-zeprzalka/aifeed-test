@@ -214,29 +214,20 @@ Implementacja Upstash już była gotowa i jest w historii gita (commit P1-2 z te
 
 ---
 
-### P1-3. Brak `generateStaticParams()` dla głównych dynamicznych route'ów
+### P1-3. Brak `generateStaticParams()` dla głównych dynamicznych route'ów  — ✅ ZROBIONE (2026-05-16)
 
-**Lokalizacja:** `src/app/artykul/[slug]/page.tsx`, `src/app/kategoria/[slug]/page.tsx`, `src/app/tag/[slug]/page.tsx`.
+**Co zostało zrobione:**
 
-**Problem:** każde pierwsze wejście na nowy `slug` to **on-demand ISR** — Vercel buduje stronę dopiero przy pierwszym żądaniu (≈ 800-2000 ms). Bot Google trafia w cold-start zamiast w gotowy HTML, co psuje Time-To-First-Byte i Core Web Vitals z perspektywy crawlowania.
+- ✅ **`src/app/artykul/[slug]/page.tsx`** — `generateStaticParams()` zwraca top **500** najnowszych slugów (`getSitemapArticles(500)`). Komentarz: limit chroni build time < 60s nawet przy 10k+ artykułów; reszta przez on-demand ISR (`revalidate=60`).
+- ✅ **`src/app/kategoria/[slug]/page.tsx`** — `generateStaticParams()` (synchroniczna) z `siteConfig.categories` — **6 kategorii prerendered** w build time. Paginacja (`?page=N`) zostaje dynamiczna, ale canonical wskazuje na page 1, więc to OK dla crawlera.
+- ✅ **`src/app/tag/[slug]/page.tsx`** — `generateStaticParams()` z `getPopularTags(100)` — top 100 tagów. Reszta (długi ogon) lecąca przez on-demand ISR i tak jest thin content (zob. P1-6).
 
-**Akcja:**
+**Efekt:** bot Google na pierwszym wejściu dostaje gotowy HTML zamiast cold-start ISR (800-2000 ms). Lepszy TTFB w Search Console "Inspect URL", lepszy crawl budget.
 
-```ts
-// src/app/artykul/[slug]/page.tsx — DODAJ (po linii 22):
-import { getSitemapArticles } from "@/lib/data";
+**Co warto zrobić dodatkowo:**
 
-export async function generateStaticParams() {
-  // Pre-render top 500 najnowszych — reszta przez on-demand ISR.
-  // Limit 500 chroni przed wybuchem build time przy 10k+ artykułów.
-  const articles = await getSitemapArticles(500);
-  return articles.map((a) => ({ slug: a.slug }));
-}
-```
-
-Analogicznie dla `/kategoria/[slug]` (pre-render wszystkich 6 kategorii z `siteConfig.categories`) i `/tag/[slug]` (top 100 tagów przez `getPopularTags(100)`).
-
-**Korzyść:** statyczne 500 artykułów = natychmiastowy HTML przy crawl + lepsze TTFB w narzędziach Google Search Console "Inspect URL".
+- Po P1-6 (decyzja ws. tagów) — jeśli wybierzemy "noindex tagów" (ścieżka A), można `generateStaticParams` dla `/tag/[slug]` w ogóle usunąć (bot ich nie odwiedzi).
+- Pre-render większej liczby artykułów (np. 2000) jest możliwe — zmienić parametr w `getSitemapArticles(N)`. Trzeba zważyć build time.
 
 ---
 
@@ -270,52 +261,68 @@ Analogicznie dla `/kategoria/[slug]` (pre-render wszystkich 6 kategorii z `siteC
 
 ---
 
-### P1-5. Brak observability — pipeline pada w ciszy
+### P1-5. Brak observability — pipeline pada w ciszy  — ✅ ZROBIONE (2026-05-16)
 
-**Lokalizacja:** cały `src/app/api/cron/generate/route.ts`. Logi tylko `console.log/warn/error`.
+**Co zostało zrobione (telemetria + chroniony dashboard `/admin`):**
 
-**Skutek:** jeśli OpenRouter ma outage albo RSS źródło zwraca 503, pipeline zaloguje błąd i pójdzie dalej. **Nie wiesz**: ile generacji się nie udało, jaki jest koszt dzienny, czy quality gate odrzuca 5% czy 50%, ile dni z rzędu wpadasz w refusal.
+#### Schema DB
+- ✅ **Migracja `supabase/migrations/003_pipeline_events.sql`** — tabela `pipeline_events (id, run_id, event, payload jsonb, created_at)` + 2 indeksy (`(run_id, created_at)`, `(event, created_at DESC)`) + RLS bez public policy (service role only).
+- ✅ Te same definicje dodane do `supabase/schema.sql` (źródło prawdy dla nowych instalacji) + wpis do `supabase/README.md`.
 
-**Akcja:**
+#### Telemetria
+- ✅ **`src/lib/telemetry.ts`** — `logPipelineEvent(runId, event, payload)` + `newRunId()` (`${timestamp}-${hex8}` — sortowalny po czasie, kolizji w praktyce brak). Wszystkie błędy zapisu swallowed — telemetria nie ubija pipeline'u.
+- ✅ **`src/app/api/cron/generate/route.ts`** — pełna instrumentacja:
+  - `run_start` (count_requested, scraped_total, new_after_dedup, to_process)
+  - `scrape_skip` (gdy `sourceContent.length < 100`)
+  - `ai_refusal` (gdy AI zwróci frazę odmowy)
+  - `quality_reject` (score, issues)
+  - `article_generated` (slug, source_name, category, quality_score, is_featured, thumbnail_source, word_count)
+  - `article_failed` (stage: `insert` lub `exception`, error)
+  - `run_end` (generated, rejected, failed, aborted, duration_ms) — także w bloku catch zewnętrznego try (run_end zawsze leci, nawet gdy pipeline padnie globalnie)
+  - `run_id` zwracany w response API (pozwala correlować z dashboardem)
+- ✅ **`src/lib/ai/writer.ts`** — opcjonalny parametr `runId` w `generateArticle()`. Gdy przekazany, loguje `ai_cost` (`type: "article"`, model, tokens, cost_usd, title).
+- ✅ **`src/lib/images/generator.ts`** — opcjonalny parametr `runId` w `getArticleThumbnail()` → propagowany do `generateAIImage()` → loguje `ai_cost` (`type: "image"`) tylko gdy AI generation faktycznie się odbyła (og:image scrape jest darmowy, nie logujemy).
 
-1. **Tabela `pipeline_events` w Supabase**:
-   ```sql
-   CREATE TABLE IF NOT EXISTS pipeline_events (
-     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-     run_id TEXT NOT NULL,
-     event TEXT NOT NULL,
-     payload JSONB,
-     created_at TIMESTAMPTZ DEFAULT now()
-   );
-   CREATE INDEX idx_pipeline_events_run ON pipeline_events(run_id, created_at);
-   CREATE INDEX idx_pipeline_events_event ON pipeline_events(event, created_at DESC);
-   ALTER TABLE pipeline_events ENABLE ROW LEVEL SECURITY;
-   -- brak public policy — service role only
-   ```
+#### Dashboard /admin
+- ✅ **`src/lib/admin-data.ts`** — service-role queries z agregacją w JS (skala ≤ 30k events/rok). 4 funkcje:
+  - `getRecentRuns(limit)` — grupuje eventy po `run_id`, zwraca `RunSummary` (startedAt, durationMs, generated/rejected/failed/aborted, complete flag).
+  - `getTotals(windowDays)` — 7-dniowe sumy + koszt AI z `ai_cost` events + avg duration.
+  - `getPerSourceBreakdown(windowDays)` — per RSS source: generated/rejected/failed.
+  - `getRecentFailures(limit)` — ostatnie quality_reject/article_failed/ai_refusal/scrape_skip z reason.
+- ✅ **`src/app/admin/layout.tsx`** — własny minimal layout (bez Header/Footer publicznego serwisu), `robots: noindex, nofollow, nocache`, `dynamic = "force-dynamic"`, `revalidate = 0`.
+- ✅ **`src/app/admin/page.tsx`** — server component (zero JS w bundle):
+  - 6 metryk kafelków (runs/generated/rejected/failed/aborted/koszt USD)
+  - tabela ostatnich 10 runów z statusem ok/partial
+  - tabela per-source breakdown
+  - tabela ostatnich 15 odrzuceń/błędów
+  - graceful empty states (gdy brak migracji 003 lub brak runów)
 
-2. **Helper w `src/lib/telemetry.ts`**:
-   ```ts
-   import { createAdminClient } from "@/lib/supabase/admin";
-   export async function logPipelineEvent(
-     runId: string, event: string, payload: Record<string, unknown> = {}
-   ) {
-     try {
-       await createAdminClient().from("pipeline_events").insert({ run_id: runId, event, payload });
-     } catch (e) { console.error("[telemetry]", e); }
-   }
-   ```
+#### Bezpieczeństwo dostępu
+- ✅ **`src/proxy.ts`** — HTTP Basic Auth dla `/admin/*` (ADMIN_USERNAME + ADMIN_PASSWORD z env). Bez env → **503** (lepiej niż otwarty dostęp). Dodatkowo dla `/admin/*`: `X-Robots-Tag: noindex, nofollow` + `Cache-Control: private, no-store, no-cache`.
+- ✅ **`src/app/robots.ts`** — `/admin/` już było w disallow (komentarz uzupełniony — trzy warstwy obrony: robots.txt + X-Robots-Tag + meta noindex + Basic Auth).
+- ✅ **`.env.example`** — dodane `ADMIN_USERNAME` + `ADMIN_PASSWORD` z komentarzem.
 
-3. **Instrumentacja** w `runPipeline()`:
-   - Start: `{event: "run_start", count}`
-   - Per artykuł: `scrape_ok / scrape_skip / ai_ok / ai_refusal / quality_reject / insert_ok / insert_fail`
-   - Koszt: po każdym `generateArticle`, zapisz `prompt_tokens`, `completion_tokens`, `usage.total_cost` (writer.ts:188-193 ma już te dane — tylko trzeba je zapisywać zamiast logować).
-   - End: `{event: "run_end", generated, rejected, failed, duration_ms}`.
+#### Weryfikacja
+- ✅ `npx tsc --noEmit` OK, `npm run lint` OK (1 escape JSX poprawiony), `npm test` 48/48 zielone.
 
-4. **Dashboard:** prosty `/admin` (chroniony Basic Auth lub Vercel Authentication) z paroma kafelkami: koszty 7d, generations 7d, refusal rate, top failure reasons.
+**Co MUSISZ zrobić poza kodem:**
 
-5. **Alerting:** w Supabase Database Webhooks → trigger na `INSERT INTO pipeline_events WHERE event LIKE '%_fail%'` → POST do Discord/Slack webhook.
+1. **Wykonaj migrację 003** w Supabase SQL Editor:
+   - Dashboard → SQL Editor → New query → wklej `supabase/migrations/003_pipeline_events.sql` → Run.
+   - Weryfikacja: `SELECT * FROM pipeline_events LIMIT 1;` → pusty wynik (brak rzędu) bez błędu o nieistniejącej tabeli.
 
-**Bez tego nie da się eksploatować produkcyjnie ani optymalizować promptów na bazie danych.**
+2. **Dodaj env vars w Vercel** (Project → Settings → Environment Variables):
+   - `ADMIN_USERNAME` = wybrana nazwa (np. `admin`).
+   - `ADMIN_PASSWORD` = długie hasło (min 20 znaków, najlepiej generowane: `openssl rand -base64 24`).
+   - Scope: **Production + Preview** (żebyś mógł sprawdzić dashboard na preview deployach).
+
+3. **Po deployu**: otwórz `https://www.aifeed.pl/admin` → browser zapyta o login. Dane jak wyżej. Dashboard pokaże "Brak runów..." dopóki cron się nie odpali (najbliższe 05:00 UTC) i nie wypełni `pipeline_events`.
+
+**Co warto zrobić dodatkowo (P2/P3):**
+
+- Alerting przez Supabase Database Webhooks → POST do Discord/Slack na każdy `article_failed` lub `run_end` z `failed > 0`.
+- Wykres czasowy (cost trend 30d) — np. `recharts`, jeśli pojawi się potrzeba.
+- Export do CSV (przyda się przy analizach jakości promptów).
 
 ---
 
@@ -780,10 +787,10 @@ Przy założeniu, że P0 zrobione, P1 wdrażane.
 
 ### Sprint 1 — pre-launch (1-2 tygodnie)
 
-- [ ] `generateStaticParams()` dla artykułu, kategorii, tagów (P1-3)
+- [x] **`generateStaticParams()` dla artykułu (top 500), kategorii (6 z config), tagów (top 100) (P1-3) — 2026-05-16**
 - [x] **Rate limiter — ulepszenie API (P1-2) — 2026-05-16**; świadoma decyzja: zostajemy na in-memory dla MVP, upgrade na shared store gdy ruch wzrośnie (>100 req/min) lub pojawi się anomalia
 - [x] **`count=4` w `vercel.json` + time-budget guard w pipeline (P1-1) — 2026-05-16** (zostajemy na Hobby)
-- [ ] `pipeline_events` tabela + telemetry helper (P1-5)
+- [x] **`pipeline_events` tabela + telemetry + dashboard `/admin` z Basic Auth (P1-5) — 2026-05-16**; pozostało zaaplikowanie migracji 003 + ustawienie ADMIN_USERNAME/ADMIN_PASSWORD w Vercel
 - [ ] `noindex` na tagach (Ścieżka A z P1-6)
 - [ ] CSP + COOP + CORP w proxy (P1-7)
 - [ ] `NEXT_PUBLIC_GA_ID` env var (P1-8)
@@ -814,7 +821,7 @@ Krótka mapa "kto za co odpowiada" — przydatna przy nawigacji w kodzie i przy 
 
 | Plik | Rola | Zmiana w audycie |
 |------|------|-------------------|
-| `src/proxy.ts` | Security headers (HSTS, X-Frame, Permissions-Policy) | + CSP/COOP/CORP (P1-7) |
+| `src/proxy.ts` | Security headers (HSTS, X-Frame, Permissions-Policy) · ✅ Basic Auth + noindex dla /admin (P1-5) | + CSP/COOP/CORP (P1-7) |
 
 ### Server data layer
 
@@ -830,15 +837,15 @@ Krótka mapa "kto za co odpowiada" — przydatna przy nawigacji w kodzie i przy 
 
 | Plik | Rola | Zmiana w audycie |
 |------|------|-------------------|
-| `src/app/api/cron/generate/route.ts` | Główny pipeline, 300s budget | ✅ time-budget guard + count=4 (P1-1) · TODO: telemetry (P1-5), idempotency (P2-1) |
+| `src/app/api/cron/generate/route.ts` | Główny pipeline, 300s budget | ✅ time-budget guard + count=4 (P1-1) · ✅ pełna telemetry (P1-5) · TODO: idempotency (P2-1) |
 | `src/app/api/cron/seed/route.ts` | Ręczny seed kategorii | weryfikacja czy uż używane |
 | `src/lib/scraper/sources.ts` | 20 RSS feedów | nowe źródła PL warto dorzucić |
 | `src/lib/scraper/parser.ts` | Parse + AI_KEYWORD_REGEX + greedy diversity | bez zmian — solidne |
 | `src/lib/scraper/content.ts` | Scrape full text + SSRF guards | **NIE LUZUJ** isInternalHost |
-| `src/lib/ai/writer.ts` | OpenRouter call + extractMeta + normalizeMarkdown | retry-with-backoff (P3) |
+| `src/lib/ai/writer.ts` | OpenRouter call + extractMeta + normalizeMarkdown · ✅ `ai_cost` logging (P1-5) | retry-with-backoff (P3) |
 | `src/lib/ai/prompts.ts` | System + user prompt (po polsku) | bez zmian — dopracowane |
 | `src/lib/ai/quality.ts` | Heurystyczny scoring 0-100, threshold 50 | sprawdzić edge cases dla score 50-79 |
-| `src/lib/images/generator.ts` | og:image scrape → Gemini 2.5 Flash → Supabase Storage | sharp/AVIF (P1-4), escape titles (P3-1) |
+| `src/lib/images/generator.ts` | og:image scrape → Gemini 2.5 Flash → Supabase Storage · ✅ `ai_cost` logging (P1-5) | sharp/AVIF (P1-4), escape titles (P3-1) |
 | `src/lib/typography.ts` | Polish NBSP/dash/quotes | bez zmian |
 
 ### Public API
@@ -853,9 +860,9 @@ Krótka mapa "kto za co odpowiada" — przydatna przy nawigacji w kodzie i przy 
 | Plik | revalidate | Zmiana w audycie |
 |------|-----------|-------------------|
 | `src/app/(home)/page.tsx` | 300s | priorytety LCP, generateStaticParams |
-| `src/app/artykul/[slug]/page.tsx` | 60s | **generateStaticParams (P1-3)**, `<noscript>` fallback dla TOC |
-| `src/app/kategoria/[slug]/page.tsx` | 300s | generateStaticParams (P1-3) |
-| `src/app/tag/[slug]/page.tsx` | 300s | **noindex (P1-6)** ALBO content investment |
+| `src/app/artykul/[slug]/page.tsx` | 60s | ✅ generateStaticParams top 500 (P1-3) · TODO: `<noscript>` fallback dla TOC |
+| `src/app/kategoria/[slug]/page.tsx` | 300s | ✅ generateStaticParams z siteConfig (P1-3) |
+| `src/app/tag/[slug]/page.tsx` | 300s | ✅ generateStaticParams top 100 (P1-3) · TODO: **noindex (P1-6)** ALBO content investment |
 | `src/app/szukaj/page.tsx` | client | noindex OK |
 | `src/app/o-serwisie/page.tsx` | — | EEAT content boost (sprint 1) |
 | `src/app/polityka-prywatnosci/page.tsx` | — | sprawdzić RODO compliance |
@@ -901,7 +908,7 @@ Krótka mapa "kto za co odpowiada" — przydatna przy nawigacji w kodzie i przy 
 | `eslint.config.mjs` | OK |
 | `tsconfig.json` | OK |
 | `components.json` | OK |
-| `.env.example` | bez zmian (Upstash nieużywany) · TODO: `NEXT_PUBLIC_GA_ID` (P1-8) |
+| `.env.example` | ✅ `ADMIN_USERNAME`, `ADMIN_PASSWORD` (P1-5) · TODO: `NEXT_PUBLIC_GA_ID` (P1-8) |
 | `.gitignore` | ✅ `supabase/.temp/`, `supabase/.branches/`, `scripts/*.local.*` (P0-1) |
 
 ---

@@ -14,6 +14,16 @@ export const revalidate = 300;
 
 const PAGE_SIZE = 12;
 
+/**
+ * Wszystkie 6 kategorii pochodzi ze stałego `siteConfig` — nie ma sensu
+ * trzymać ich jako on-demand ISR. Pre-render w build time = każdy bot
+ * Google dostaje gotowy HTML. Paginacja (`?page=N`) wciąż jest dynamiczna
+ * — to OK, bo crawler i tak preferuje canonical (`/kategoria/slug`).
+ */
+export function generateStaticParams() {
+  return siteConfig.categories.map((c) => ({ slug: c.slug }));
+}
+
 interface PageProps {
   params: Promise<{ slug: string }>;
   searchParams: Promise<{ page?: string }>;

@@ -79,6 +79,17 @@ CREATE TABLE IF NOT EXISTS newsletter_subscribers (
   unsubscribed_at TIMESTAMPTZ
 );
 
+-- Telemetria pipeline'u (P1-5) — zdarzenia z każdego cron run'u (start, end,
+-- scrape skips, AI refusals, quality rejects, koszty). Czytane przez
+-- dashboard /admin. Service role only (admin client).
+CREATE TABLE IF NOT EXISTS pipeline_events (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  event TEXT NOT NULL,
+  payload JSONB DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
 -- =============================================================================
 -- INDEKSY
 -- =============================================================================
@@ -102,6 +113,12 @@ CREATE INDEX IF NOT EXISTS idx_scraped_items_url ON scraped_items(source_url);
 
 -- FK Postgres NIE jest auto-indexowane. RPC popular_tags robi JOIN po tag_id.
 CREATE INDEX IF NOT EXISTS idx_article_tags_tag_id ON article_tags(tag_id);
+
+-- pipeline_events: grupowanie po run + filtrowanie po event type/czasie.
+CREATE INDEX IF NOT EXISTS idx_pipeline_events_run
+  ON pipeline_events (run_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_pipeline_events_event
+  ON pipeline_events (event, created_at DESC);
 
 -- =============================================================================
 -- TRIGGER: updated_at
@@ -135,6 +152,7 @@ ALTER TABLE tags ENABLE ROW LEVEL SECURITY;
 ALTER TABLE article_tags ENABLE ROW LEVEL SECURITY;
 ALTER TABLE scraped_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE newsletter_subscribers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE pipeline_events ENABLE ROW LEVEL SECURITY;
 
 -- Public SELECT policies. CREATE POLICY nie ma IF NOT EXISTS, więc najpierw
 -- DROP IF EXISTS. Service role bypasuje RLS (admin client → pełny dostęp).
@@ -155,8 +173,8 @@ DROP POLICY IF EXISTS "Public read article_tags" ON article_tags;
 CREATE POLICY "Public read article_tags" ON article_tags
   FOR SELECT USING (true);
 
--- scraped_items i newsletter_subscribers celowo BEZ public policy — zapis
--- i odczyt tylko przez service role key.
+-- scraped_items, newsletter_subscribers i pipeline_events celowo BEZ public
+-- policy — zapis i odczyt tylko przez service role key.
 
 -- =============================================================================
 -- RPC (stored functions)

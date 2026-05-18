@@ -1,4 +1,5 @@
 import { createAdminClient } from "@/lib/supabase/admin";
+import { logPipelineEvent } from "@/lib/telemetry";
 
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 const IMAGE_MODEL = "google/gemini-2.5-flash-image";
@@ -15,7 +16,10 @@ export interface ThumbnailResult {
  */
 export async function getArticleThumbnail(
   title: string,
-  sourceUrl: string
+  sourceUrl: string,
+  // Opcjonalny — gdy przekazany, logujemy koszt AI image gen do
+  // `pipeline_events` (event: `ai_cost`, type: `image`).
+  runId?: string,
 ): Promise<ThumbnailResult> {
   // Step 1: Try scraping og:image from source (free)
   console.log("[Thumbnail] Trying og:image scrape from source...");
@@ -27,7 +31,7 @@ export async function getArticleThumbnail(
 
   // Step 2: Generate with AI via OpenRouter
   console.log("[Thumbnail] No og:image found, generating with AI...");
-  const aiUrl = await generateAIImage(title);
+  const aiUrl = await generateAIImage(title, runId);
   if (aiUrl) {
     console.log("[Thumbnail] AI image generated and stored in Supabase Storage");
     return { url: aiUrl, source: null };
@@ -133,7 +137,7 @@ function sanitizeTitleForPrompt(title: string): string {
     .slice(0, 200);                         // hard cap on prompt-injected length
 }
 
-async function generateAIImage(title: string): Promise<string | null> {
+async function generateAIImage(title: string, runId?: string): Promise<string | null> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
     console.warn("[Thumbnail] OPENROUTER_API_KEY not set, skipping AI generation");
@@ -181,9 +185,20 @@ Requirements:
 
     const data = await res.json();
 
-    // Log cost info
+    // Log cost info — stdout dla dev, pipeline_events dla dashboardu /admin.
     if (data.usage) {
       console.log(`[Thumbnail Cost] ${JSON.stringify(data.usage)}`);
+    }
+    if (runId && data.usage) {
+      await logPipelineEvent(runId, "ai_cost", {
+        type: "image",
+        model: IMAGE_MODEL,
+        prompt_tokens: data.usage.prompt_tokens,
+        completion_tokens: data.usage.completion_tokens,
+        total_tokens: data.usage.total_tokens,
+        cost_usd: data.usage.total_cost,
+        title,
+      });
     }
 
     // Extract base64 image — try OpenRouter images array first

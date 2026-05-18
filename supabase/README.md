@@ -21,6 +21,7 @@ Aplikuj po kolei migracje których jeszcze nie było w Twojej DB:
 |---|---|
 | `001_newsletter_and_popular_tags.sql` | Tabela `newsletter_subscribers` + RPC `popular_tags(tag_limit)` |
 | `002_updated_at_trigger_and_fk_index.sql` | Trigger `articles.updated_at` + indeks `article_tags(tag_id)` |
+| `003_pipeline_events.sql` | Tabela `pipeline_events` (telemetria pipeline'u, czytana przez `/admin` dashboard) + 2 indeksy + RLS service-role-only |
 
 Dla każdej: SQL Editor → New query → wklej → Run.
 
@@ -32,7 +33,7 @@ Migracje są idempotentne (`CREATE … IF NOT EXISTS`, `CREATE OR REPLACE`, `DRO
 -- Tabele
 SELECT table_name FROM information_schema.tables
 WHERE table_schema = 'public' ORDER BY table_name;
--- Expected: article_tags, articles, categories, newsletter_subscribers, scraped_items, tags
+-- Expected: article_tags, articles, categories, newsletter_subscribers, pipeline_events, scraped_items, tags
 
 -- RPC
 SELECT proname FROM pg_proc

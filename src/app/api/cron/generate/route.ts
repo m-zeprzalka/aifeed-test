@@ -5,6 +5,7 @@ import { generateArticle } from "@/lib/ai/writer";
 import { assessArticleQuality } from "@/lib/ai/quality";
 import { getArticleThumbnail } from "@/lib/images/generator";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { logPipelineEvent, newRunId } from "@/lib/telemetry";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import slugify from "slugify";
 
@@ -48,6 +49,7 @@ async function runPipeline(request: NextRequest) {
   }
 
   const runStartedAt = Date.now();
+  const runId = newRunId();
 
   try {
     const supabase = createAdminClient();
@@ -70,14 +72,30 @@ async function runPipeline(request: NextRequest) {
     const newItems = scrapedItems.filter((i) => !existingUrls.has(i.url));
     console.log(`${newItems.length} new items after deduplication`);
 
-    if (newItems.length === 0) {
-      return Response.json({ message: "No new items to process", generated: 0 });
-    }
-
     // Step 3: Select top articles (configurable via ?count=N, default 10)
     const url = new URL(request.url);
     const count = Math.min(parseInt(url.searchParams.get("count") || "10", 10) || 10, 15);
     const topItems = selectTopArticles(newItems, count);
+
+    // Telemetria: zapis startu — dashboard /admin grupuje eventy po `run_id`.
+    await logPipelineEvent(runId, "run_start", {
+      count_requested: count,
+      scraped_total: scrapedItems.length,
+      new_after_dedup: newItems.length,
+      to_process: topItems.length,
+    });
+
+    if (newItems.length === 0) {
+      await logPipelineEvent(runId, "run_end", {
+        generated: 0,
+        rejected: 0,
+        failed: 0,
+        aborted: 0,
+        duration_ms: Date.now() - runStartedAt,
+        reason: "no-new-items",
+      });
+      return Response.json({ message: "No new items to process", generated: 0 });
+    }
 
     // Step 4: Generate articles
     const generated: string[] = [];
@@ -124,6 +142,12 @@ async function runPipeline(request: NextRequest) {
         if (sourceContent.length < 100) {
           console.warn(`[Pipeline] Skipping "${item.title}" — source content too short or unreadable`);
           failed.push({ title: item.title, reason: "source-too-short" });
+          await logPipelineEvent(runId, "scrape_skip", {
+            title: item.title,
+            url: item.url,
+            source_name: item.sourceName,
+            content_length: sourceContent.length,
+          });
           // Still mark as processed so we don't retry bad URLs
           await supabase.from("scraped_items").upsert(
             { source_url: item.url, title: item.title, description: item.description, source_name: item.sourceName, is_processed: true },
@@ -132,7 +156,7 @@ async function runPipeline(request: NextRequest) {
           continue;
         }
 
-        const article = await generateArticle(item.title, [item.url], [item.description], sourceContent);
+        const article = await generateArticle(item.title, [item.url], [item.description], sourceContent, runId);
 
         // Validate AI response — reject refusals and garbage
         const refusalPatterns = ["nie można przetworzyć", "nie mogę", "brak treści", "brak czytelnej"];
@@ -141,6 +165,11 @@ async function runPipeline(request: NextRequest) {
         if (isRefusal) {
           console.warn(`[Pipeline] AI refused for "${item.title}", skipping`);
           failed.push({ title: item.title, reason: "ai-refusal" });
+          await logPipelineEvent(runId, "ai_refusal", {
+            title: item.title,
+            url: item.url,
+            source_name: item.sourceName,
+          });
           await supabase.from("scraped_items").upsert(
             { source_url: item.url, title: item.title, description: item.description, source_name: item.sourceName, is_processed: true },
             { onConflict: "source_url" }
@@ -155,6 +184,13 @@ async function runPipeline(request: NextRequest) {
         if (quality.score < 50) {
           console.warn(`[Pipeline] Rejecting "${article.title}" — quality score ${quality.score}/100: ${quality.issues.join(", ")}`);
           rejected.push(article.title);
+          await logPipelineEvent(runId, "quality_reject", {
+            title: article.title,
+            url: item.url,
+            source_name: item.sourceName,
+            score: quality.score,
+            issues: quality.issues,
+          });
           await supabase.from("scraped_items").upsert(
             { source_url: item.url, title: item.title, description: item.description, source_name: item.sourceName, is_processed: true },
             { onConflict: "source_url" }
@@ -166,7 +202,7 @@ async function runPipeline(request: NextRequest) {
         const sourceUrls = [item.url];
         const sourceTitles = [item.sourceName];
 
-        const thumbnail = await getArticleThumbnail(article.title, item.url);
+        const thumbnail = await getArticleThumbnail(article.title, item.url, runId);
 
         const slug = await buildUniqueSlug(supabase, article.title);
 
@@ -207,6 +243,13 @@ async function runPipeline(request: NextRequest) {
         if (insertError || !insertedArticle) {
           console.error(`Failed to insert article: ${insertError?.message}`);
           failed.push({ title: item.title, reason: `insert-failed: ${insertError?.message || "unknown"}` });
+          await logPipelineEvent(runId, "article_failed", {
+            title: item.title,
+            url: item.url,
+            source_name: item.sourceName,
+            stage: "insert",
+            error: insertError?.message || "unknown",
+          });
           continue;
         }
 
@@ -244,15 +287,41 @@ async function runPipeline(request: NextRequest) {
 
         generated.push(article.title);
         console.log(`Generated: ${article.title}`);
+        await logPipelineEvent(runId, "article_generated", {
+          title: article.title,
+          slug,
+          url: item.url,
+          source_name: item.sourceName,
+          category: article.category,
+          quality_score: quality.score,
+          is_featured: shouldFeature,
+          thumbnail_source: thumbnail.source ?? (thumbnail.url ? "ai-generated" : "none"),
+          word_count: article.content.split(/\s+/).filter(Boolean).length,
+        });
       } catch (error) {
         console.error(`Failed to generate article for "${item.title}":`, error);
         failed.push({ title: item.title, reason: String(error) });
+        await logPipelineEvent(runId, "article_failed", {
+          title: item.title,
+          url: item.url,
+          source_name: item.sourceName,
+          stage: "exception",
+          error: String(error),
+        });
       }
     }
 
     const durationMs = Date.now() - runStartedAt;
+    await logPipelineEvent(runId, "run_end", {
+      generated: generated.length,
+      rejected: rejected.length,
+      failed: failed.length,
+      aborted: aborted.length,
+      duration_ms: durationMs,
+    });
     return Response.json({
       message: `Generated ${generated.length} articles${aborted.length > 0 ? ` (${aborted.length} aborted)` : ""}`,
+      run_id: runId,
       generated,
       rejected,
       failed,
@@ -263,8 +332,16 @@ async function runPipeline(request: NextRequest) {
     });
   } catch (error) {
     console.error("Pipeline error:", error);
+    await logPipelineEvent(runId, "run_end", {
+      generated: 0,
+      rejected: 0,
+      failed: 0,
+      aborted: 0,
+      duration_ms: Date.now() - runStartedAt,
+      pipeline_error: String(error),
+    });
     return Response.json(
-      { error: "Pipeline failed", details: String(error) },
+      { error: "Pipeline failed", details: String(error), run_id: runId },
       { status: 500 }
     );
   }

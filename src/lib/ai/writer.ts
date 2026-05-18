@@ -1,7 +1,9 @@
 import { ARTICLE_SYSTEM_PROMPT, ARTICLE_USER_PROMPT } from "./prompts";
 import { polishTypography } from "../typography";
+import { logPipelineEvent } from "@/lib/telemetry";
 
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
+const ARTICLE_MODEL = "anthropic/claude-sonnet-4";
 
 /**
  * Repair common markdown formatting failures from the LLM before storage.
@@ -143,7 +145,11 @@ export async function generateArticle(
   topic: string,
   sourceUrls: string[],
   sourceDescriptions: string[],
-  sourceContent: string = ""
+  sourceContent: string = "",
+  // Opcjonalny — gdy przekazany, logujemy koszt OpenRouter do
+  // `pipeline_events` (event: `ai_cost`, type: `article`). Wywoływane z
+  // cron route. Brak runId = standalone use (test/skrypt) — pomijamy log.
+  runId?: string,
 ): Promise<GeneratedArticle> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
@@ -159,7 +165,7 @@ export async function generateArticle(
       "X-Title": "AiFeed",
     },
     body: JSON.stringify({
-      model: "anthropic/claude-sonnet-4",
+      model: ARTICLE_MODEL,
       max_tokens: 4096,
       messages: [
         {
@@ -183,13 +189,25 @@ export async function generateArticle(
   const data = await response.json();
   const responseText = data.choices?.[0]?.message?.content || "";
 
-  // Log token usage and cost for monitoring
+  // Token usage + cost — w produkcji idą do `pipeline_events` (dashboard
+  // /admin sumuje koszty 7d), w stdout dla local dev.
   const usage = data.usage;
   if (usage) {
     console.log(`[AI Cost] Tokens — prompt: ${usage.prompt_tokens}, completion: ${usage.completion_tokens}, total: ${usage.total_tokens}`);
   }
   if (data.usage?.total_cost !== undefined) {
     console.log(`[AI Cost] Total cost: $${data.usage.total_cost}`);
+  }
+  if (runId && usage) {
+    await logPipelineEvent(runId, "ai_cost", {
+      type: "article",
+      model: ARTICLE_MODEL,
+      prompt_tokens: usage.prompt_tokens,
+      completion_tokens: usage.completion_tokens,
+      total_tokens: usage.total_tokens,
+      cost_usd: usage.total_cost,
+      title: topic,
+    });
   }
 
   // Split content and metadata — flexible delimiter matching

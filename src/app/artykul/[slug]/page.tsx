@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
 import { Clock, ExternalLink, Calendar, ChevronLeft, ChevronRight } from "lucide-react";
-import { getArticleBySlug, getAdjacentArticles, getRelatedArticles } from "@/lib/data";
+import { getArticleBySlug, getAdjacentArticles, getRelatedArticles, getSitemapArticles } from "@/lib/data";
 import { ArticleCard } from "@/components/articles/article-card";
 import { Breadcrumbs } from "@/components/articles/breadcrumbs";
 import { ShareButtons } from "@/components/articles/share-buttons";
@@ -20,6 +20,21 @@ import remarkGfm from "remark-gfm";
 const getCachedArticle = cache((slug: string) => getArticleBySlug(slug));
 
 export const revalidate = 60;
+
+/**
+ * Pre-render top 500 najnowszych artykułów w build time → bot Google trafia
+ * w gotowy HTML zamiast w cold-start on-demand ISR (oszczędza 800-2000ms na
+ * pierwszym żądaniu). Pozostałe artykuły lecą przez on-demand ISR
+ * (`dynamicParams = true` jest domyślne dla App Router).
+ *
+ * Limit 500 wybrany żeby build time pozostał < 60s na Vercel Hobby nawet
+ * przy 10 000+ artykułów w bazie. Po `revalidate=60s` nowe artykuły i tak
+ * stają się statyczne po pierwszym wejściu.
+ */
+export async function generateStaticParams() {
+  const articles = await getSitemapArticles(500);
+  return articles.map((a) => ({ slug: a.slug }));
+}
 
 interface PageProps {
   params: Promise<{ slug: string }>;

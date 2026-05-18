@@ -22,6 +22,7 @@ Aplikuj po kolei migracje których jeszcze nie było w Twojej DB:
 | `001_newsletter_and_popular_tags.sql` | Tabela `newsletter_subscribers` + RPC `popular_tags(tag_limit)` |
 | `002_updated_at_trigger_and_fk_index.sql` | Trigger `articles.updated_at` + indeks `article_tags(tag_id)` |
 | `003_pipeline_events.sql` | Tabela `pipeline_events` (telemetria pipeline'u, czytana przez `/admin` dashboard) + 2 indeksy + RLS service-role-only |
+| `004_articles_fts.sql` | `articles.search_vector` (STORED tsvector, wagi title/A + excerpt/B) + GIN index + trigram index `gin_trgm_ops` na title (fallback dla literówek). Postgres jednorazowo przegrzeje istniejące wpisy podczas aplikacji. |
 
 Dla każdej: SQL Editor → New query → wklej → Run.
 

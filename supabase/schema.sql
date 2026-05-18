@@ -108,6 +108,26 @@ CREATE INDEX IF NOT EXISTS idx_articles_category ON articles(category_id);
 CREATE INDEX IF NOT EXISTS idx_articles_featured
   ON articles(is_featured, published_at DESC);
 
+-- Full-text search dla `searchArticles` (migracja 004). STORED computed
+-- column = wartość przechowywana, indeks GIN aktualizowany automatycznie
+-- przy każdym INSERT/UPDATE artykułu. Wagi: title=A (najwyższa), excerpt=B.
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+ALTER TABLE articles
+  ADD COLUMN IF NOT EXISTS search_vector tsvector
+  GENERATED ALWAYS AS (
+    setweight(to_tsvector('simple', coalesce(title, '')), 'A') ||
+    setweight(to_tsvector('simple', coalesce(excerpt, '')), 'B')
+  ) STORED;
+
+CREATE INDEX IF NOT EXISTS idx_articles_fts
+  ON articles USING GIN (search_vector);
+
+-- Trigram fallback — znajduje literówki ("openi" → "openai") gdy tsquery
+-- zwróci 0 wyników. Aplikacja używa tego przez `.ilike` po pustym FTS.
+CREATE INDEX IF NOT EXISTS idx_articles_title_trgm
+  ON articles USING GIN (title gin_trgm_ops);
+
 -- Pipeline dedup — lookup przed wstawieniem.
 CREATE INDEX IF NOT EXISTS idx_scraped_items_url ON scraped_items(source_url);
 

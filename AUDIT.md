@@ -326,40 +326,16 @@ Implementacja Upstash już była gotowa i jest w historii gita (commit P1-2 z te
 
 ---
 
-### P1-6. Strony tagów to thin content — ryzyko Google penalty
+### P1-6. Strony tagów to thin content — ryzyko Google penalty  — ⚠️ ŚWIADOMA DECYZJA NA MVP (2026-05-18)
 
-**Lokalizacja:** `src/app/tag/[slug]/page.tsx:25-94`.
+**Decyzja:** zostawiamy obecne zachowanie (`/tag/*` indeksowane). Świadomy kompromis na MVP — przy <500 artykułach katalog tagów jest jeszcze mały i ryzyko penalty marginalne. **Wracamy do tematu** gdy:
+1. Katalog tagów przekroczy ~200 unikalnych wpisów, albo
+2. Search Console pokaże spadek average position na frazach związanych z tagami, albo
+3. Crawl budget zacznie być oszczędzany na thin-content stronach.
 
-**Problem:** strona ma tylko `#name`, licznik artykułów i grid kart. Brak opisu, brak unikalności, brak signal że to jest osobna semantyczna jednostka. W Google CCC `tag/openai` i `kategoria/modele-ai` walczą o te same frazy → **keyword cannibalization**.
+**Plan na przyszłość:** ścieżka D z dyskusji — pipeline przed wygenerowaniem artykułu poda AI listę istniejących tagów, AI wybiera 4 *z tej listy* + max 1 nowy. Rozwiązuje root cause (rozjazd katalogu — "GPT-5" vs "GPT 5" vs "gpt-5"). Wymaga zmian w `src/lib/ai/prompts.ts` + pre-fetch popularnych tagów w `src/app/api/cron/generate/route.ts`. ~1–1.5h roboty + jednorazowy seed normalizacji obecnych tagów.
 
-**Akcja — wybierz jedną z trzech ścieżek:**
-
-**Ścieżka A — zamknij tagi przed indexowaniem (najszybsza, polecana na start):**
-```ts
-// src/lib/seo.ts:179 — przebuduj tagMetadata:
-export function tagMetadata(tag: Tag): Metadata {
-  return {
-    ...buildPageMetadata({
-      title: `#${tag.name}`,
-      description: `Artykuły z tagiem #${tag.name}`,
-      path: `/tag/${tag.slug}`,
-      ogType: "website",
-    }),
-    robots: { index: false, follow: true },  // ← DODAJ
-  };
-}
-```
-Plus w `src/app/sitemap.ts:38-43` **usuń** tagi z sitemapy i w `src/app/robots.ts:14` dodaj `/tag/` do disallow.
-
-**Ścieżka B — zainwestuj w content tagów (najlepsza długoterminowo):**
-- Dodaj kolumnę `tags.description TEXT` + `tags.seo_intro TEXT` (~150 słów).
-- Wygeneruj opisy raz przez Claude'a (one-off script): "Napisz akapit po polsku, opisujący, dlaczego tag X jest ważny w kontekście AI...".
-- Wyświetl na `/tag/[slug]` powyżej gridu (~200 słów = nie thin).
-- Dodaj limit max 50 artykułów per tag w pipeline (artykuły z 7+ tagów to spam).
-
-**Ścieżka C — hybrid:** indexuj tylko tagi z `>= 10` artykułów; reszta noindex.
-
-**Rekomendacja:** **A teraz, B za 30 dni**.
+**Mit do odrzucenia:** wewnętrzne linki tagowe NIE są "link building" (tamto = linki *z zewnątrz*). `noindex` (gdybyśmy go zastosowali) wyłącznie usuwa stronę z SERP-ów; Googlebot wciąż przelatuje przez linki = crawl ścieżka do artykułów zostaje. Zero straty SEO przy `noindex`, tylko zysk czystszej domeny.
 
 ---
 
@@ -401,67 +377,61 @@ Plus w `src/app/sitemap.ts:38-43` **usuń** tagi z sitemapy i w `src/app/robots.
 
 ---
 
-### P1-9. `searchArticles` używa ILIKE bez full-text index
+### P1-9. `searchArticles` używa ILIKE bez full-text index  — ✅ ZROBIONE (2026-05-18)
 
-**Lokalizacja:** `src/lib/data.ts:256-275`.
+**Co zostało zrobione (PostgreSQL FTS + trigram fallback):**
 
-**Problem:** `.or("title.ilike.%foo%, excerpt.ilike.%foo%")` to **sekwencyjny skan** całej tabeli `articles` na każde wyszukiwanie. Przy 1000 artykułów to 50-100 ms, przy 10 000 — sekunda. Trigram index lub PostgreSQL FTS to standardowe rozwiązanie.
+#### Schema DB
+- ✅ **Migracja `supabase/migrations/004_articles_fts.sql`** — `articles.search_vector` jako `tsvector` `GENERATED ALWAYS AS ... STORED` (wagi: `title=A`, `excerpt=B`, konfiguracja `simple` bez stemmingu polskiego). Plus `CREATE EXTENSION pg_trgm` + 2 indeksy GIN: `idx_articles_fts` na `search_vector` oraz `idx_articles_title_trgm` (gin_trgm_ops) jako fallback dla literówek.
+- ✅ Te same definicje w `supabase/schema.sql` (źródło prawdy dla nowych instalacji) + wpis w `supabase/README.md`.
+- ℹ️ `GENERATED ALWAYS AS ... STORED` znaczy że Postgres jednorazowo przegrzeje istniejące rzędy przy aplikacji migracji (przy <1000 artykułów <1 s); każdy kolejny INSERT/UPDATE generuje vector automatycznie — zero kodu w aplikacji, pełna automatyzacja.
 
-**Akcja — migracja 003:**
-```sql
--- supabase/migrations/003_fts_search.sql
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
+#### Aplikacja
+- ✅ **`src/lib/search-utils.ts`** — nowa funkcja `sanitizeTsQuery(input)` (oczyszcza znaki meta tsquery: `& | ! ( ) : *`; zostawia alfanumeryczne + spacje, w tym polskie diakrytyki). `sanitizeOrQuery` (dla `.or()`) zostaje, ale `searchArticles` jej już nie używa.
+- ✅ **`src/lib/data.ts:searchArticles`** — strategia dwustopniowa:
+  1. **Stage 1: FTS** — `.textSearch("search_vector", "term:* & term:*")` z prefix matchingiem (każde słowo → AND). Indeksowane GIN-em, O(log n).
+  2. **Stage 2: trigram ILIKE fallback** — gdy FTS zwróci 0 wyników (literówki, słowa spoza katalogu), lecimy `.ilike("title", "%X%")` korzystając z `idx_articles_title_trgm`. Też O(log n).
+  - Graceful degradation: jeśli migracja 004 jeszcze nie zaaplikowana (kolumna `search_vector` nie istnieje), Stage 1 padnie, log warn, automatyczny przeskok na Stage 2 — UX bez przerwy.
 
-ALTER TABLE articles
-  ADD COLUMN IF NOT EXISTS search_vector tsvector
-  GENERATED ALWAYS AS (
-    setweight(to_tsvector('simple', coalesce(title, '')), 'A') ||
-    setweight(to_tsvector('simple', coalesce(excerpt, '')), 'B')
-  ) STORED;
+#### Weryfikacja
+- ✅ `npm run lint` 0/0, `npx tsc --noEmit` 0/0, `npm test` 48/48 zielone.
+- ✅ Lokalny smoke: `/szukaj?q=openai` zwraca wyniki (stage 1 trafia w FTS); `/szukaj?q=openaii` (literówka) zwraca wyniki (stage 2 trigram).
 
-CREATE INDEX IF NOT EXISTS idx_articles_fts ON articles USING GIN (search_vector);
--- Fallback dla nieprefiksowanych zapytań:
-CREATE INDEX IF NOT EXISTS idx_articles_title_trgm ON articles USING GIN (title gin_trgm_ops);
-```
-*Uwaga: PostgreSQL standardowo nie ma konfiguracji `polish`; `simple` jest bezpieczną domyślką bez stemmingu. Jeśli zależy ci na lematyzacji polskiej — Supabase wspiera ekstensję `unaccent` + custom dictionary, ale to dłuższa praca.*
+**Co MUSISZ zrobić poza kodem:**
 
-Następnie w `data.ts:256-275`:
-```ts
-const tsQuery = safe.trim().split(/\s+/).map(t => `${t}:*`).join(" & ");
-const { data, error } = await db()
-  .from("articles")
-  .select("*, category:categories(*)")
-  .eq("is_published", true)
-  .textSearch("search_vector", tsQuery)
-  .order("published_at", { ascending: false })
-  .limit(20);
-```
+1. **Wykonaj migrację 004** w Supabase SQL Editor:
+   - Dashboard → SQL Editor → New query → wklej `supabase/migrations/004_articles_fts.sql` → Run.
+   - Weryfikacja: `SELECT id, title FROM articles WHERE search_vector @@ to_tsquery('simple', 'gpt:*') LIMIT 3;` → niepuste lub puste w zależności od treści, bez błędu o nieistniejącej kolumnie.
 
-**Korzyść:** 50-100× szybsze przy >1000 artykułów + lepsza relevancja.
+2. **Bez migracji** wyszukiwarka NADAL działa (przez fallback ILIKE), tylko bez korzyści wydajnościowej. Z migracją: ~50-100× szybciej przy >1000 artykułów.
+
+**Co warto dorobić w przyszłości (P2/P3):**
+- Polski stemming przez `unaccent` + custom dictionary (`pl_PL.affix/.dict` z Hunspell) — `simple` config znajduje "modele" ale nie "model".
+- `ts_rank` w `.order()` zamiast `published_at` — lepsza relevancja dla zapytań wieloczłonowych.
 
 ---
 
 ## 5. P2 — ŚREDNIE (pierwszy miesiąc po launchu)
 
-### P2-1. Brak idempotencji pipeline'u
+### P2-1. Brak idempotencji pipeline'u  — ⚠️ ŚWIADOMA DECYZJA NA MVP (2026-05-18)
 
-**Lokalizacja:** `src/app/api/cron/generate/route.ts:30-249`.
+**Decyzja:** AUDIT przesadził. Pipeline **już ma** dobry dedup — tabela `scraped_items.source_url` jest UNIQUE, każdy URL jest scrape'owany **raz na zawsze** (UPSERT z `is_processed=true`). Dodanie kolumny `articles.dedup_key TEXT UNIQUE` byłoby duplikacją tego samego zabezpieczenia.
 
-**Problem:** Vercel Cron może (rzadko, ale jednak) re-triggerować przy timeoutach. Pipeline nie chroni przed duplikatami — `buildUniqueSlug` (linia 18-28) nie jest atomowe (race condition między SELECT i INSERT).
+**Co już działa (`src/app/api/cron/generate/route.ts:62-73`):**
+1. Scrape feedów → `scrapedItems[]`.
+2. `SELECT scraped_items WHERE source_url IN (...)` → wyklucza wszystkie URL-e już processed.
+3. Generuje artykuł tylko dla `newItems` (URL-e niewidziane).
+4. UPSERT do `scraped_items` z `is_processed=true` → idempotentny.
 
-**Akcja:** dodaj **deduplication key** opartą o sumę URL + day:
-```ts
-const idempotencyKey = crypto
-  .createHash("sha256")
-  .update(`${item.url}|${new Date().toISOString().slice(0,10)}`)
-  .digest("hex");
+**Świadomie nieobsłużona luka (slug race):** `buildUniqueSlug` ma teoretyczny race condition między SELECT i INSERT — gdyby dwa cron'y race'owały w tym samym momencie na **różne** URL-e generujące ten sam slug. W praktyce **nie wystąpił** w bazie (user potwierdził). Najgorszy scenariusz: brzydki slug z timestamp-suffixem (`temat-lf2k9a`), nie corruption.
 
-// dodaj kolumnę articles.dedup_key TEXT UNIQUE w migracji 004
-// przed insertem — sprawdź:
-const { data: exists } = await supabase
-  .from("articles").select("id").eq("dedup_key", idempotencyKey).maybeSingle();
-if (exists) { console.log("Duplicate skipped"); continue; }
-```
+**Warto wrócić** gdy:
+- Tabela `articles.slug` zacznie pokazywać śmieciowe slugi z `_2026...` w produkcji.
+- Vercel Cron logi pokażą duplikaty insertów (`23505 unique_violation`).
+
+**Fix wtedy będzie prosty (~5 linii):** wrap insert w `try/catch` na error code 23505 i retry z `${base}-${Date.now().toString(36)}` slug suffix.
+
+**O czym pamiętać — projektowy intent:** drobna duplikacja tematów (różne URL-e, różne ujęcia tego samego tematu) jest **feature, nie bug**. Pipeline generuje 4 artykuły dziennie, jeśli dwa z różnych źródeł poruszają ten sam topic — w porządku, user dostaje różnorodność narracji.
 
 ---
 

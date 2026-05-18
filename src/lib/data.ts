@@ -1,7 +1,7 @@
 import { cache } from "react";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { Article, Category, Tag } from "@/types/database";
-import { sanitizeOrQuery } from "@/lib/search-utils";
+import { escapeIlike, sanitizeTsQuery } from "@/lib/search-utils";
 
 // ----- Supabase client (read-only, anon key) -----
 // Uses anon key (not server.ts cookie client) because all data access here is
@@ -253,23 +253,63 @@ export async function getCategoryBySlug(slug: string): Promise<Category | null> 
   return data;
 }
 
+/**
+ * Wyszukiwarka. Strategia dwustopniowa:
+ *
+ * 1. **FTS przez `articles.search_vector`** (migracja 004) — indeksowany
+ *    GIN, O(log n). Każde słowo zapytania jest prefix-matched (`term:*`),
+ *    łączone AND-em — "open ai" znajduje artykuły z "openai" i "AI" jednocześnie.
+ * 2. **Fallback trigram ILIKE na title** — gdy FTS zwróci 0 wyników
+ *    (literówki, słowa spoza katalogu). `idx_articles_title_trgm` (GIN
+ *    gin_trgm_ops) obsługuje to w O(log n).
+ *
+ * Bez migracji 004 FTS zwraca błąd — wtedy też lecimy na ILIKE fallback
+ * (gracefulnie). Dzięki temu deploy kodu może wyprzedzić aplikację
+ * migracji bez padania UX.
+ */
 export async function searchArticles(query: string): Promise<ArticleWithRelations[]> {
-  const safe = sanitizeOrQuery(query);
-  if (!safe.trim()) return [];
+  const safe = sanitizeTsQuery(query);
+  if (!safe) return [];
 
-  const { data: articles, error } = await db()
+  // Build prefix tsquery: "open ai" → "open:* & ai:*"
+  const tsQuery = safe.split(" ").filter(Boolean).map((t) => `${t}:*`).join(" & ");
+
+  let articles: (Article & { category: Category | null })[] = [];
+
+  // Stage 1: FTS
+  const ftsRes = await db()
     .from("articles")
     .select("*, category:categories(*)")
     .eq("is_published", true)
-    .or(`title.ilike.%${safe}%,excerpt.ilike.%${safe}%`)
+    .textSearch("search_vector", tsQuery)
     .order("published_at", { ascending: false })
     .limit(20);
 
-  if (error) {
-    console.error("[data] searchArticles failed:", error.message);
-    return [];
+  if (ftsRes.error) {
+    // Migracja 004 mogła nie być jeszcze zaaplikowana (search_vector nie istnieje)
+    // — log warn, lecimy od razu na ILIKE.
+    console.warn("[data] searchArticles FTS failed, falling back to ILIKE:", ftsRes.error.message);
+  } else if (ftsRes.data) {
+    articles = ftsRes.data;
   }
-  if (!articles || articles.length === 0) return [];
+
+  // Stage 2: trigram ILIKE fallback przy 0 wyników z FTS.
+  if (articles.length === 0) {
+    const ilikeRes = await db()
+      .from("articles")
+      .select("*, category:categories(*)")
+      .eq("is_published", true)
+      .ilike("title", `%${escapeIlike(safe)}%`)
+      .order("published_at", { ascending: false })
+      .limit(20);
+    if (ilikeRes.error) {
+      console.error("[data] searchArticles ILIKE fallback failed:", ilikeRes.error.message);
+      return [];
+    }
+    articles = ilikeRes.data ?? [];
+  }
+
+  if (articles.length === 0) return [];
 
   return attachTagsBatch(articles);
 }

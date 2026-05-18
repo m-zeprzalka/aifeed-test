@@ -1,6 +1,6 @@
 import { cache } from "react";
 import { notFound } from "next/navigation";
-import Image from "next/image";
+import { Thumbnail } from "@/components/ui/thumbnail";
 import Link from "next/link";
 import { Clock, ExternalLink, Calendar, ChevronLeft, ChevronRight } from "lucide-react";
 import { getArticleBySlug, getAdjacentArticles, getRelatedArticles, getSitemapArticles } from "@/lib/data";
@@ -182,7 +182,7 @@ export default async function ArticlePage({ params }: PageProps) {
         {article.thumbnail_url && (
           <div className="mx-auto max-w-4xl px-4 sm:px-6 lg:px-8 mb-10">
             <div className="relative aspect-[2/1] overflow-hidden rounded-xl">
-              <Image
+              <Thumbnail
                 src={article.thumbnail_url}
                 alt={article.title}
                 fill

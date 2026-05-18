@@ -1,6 +1,6 @@
 import Link from "next/link";
-import Image from "next/image";
 import { Clock } from "lucide-react";
+import { Thumbnail } from "@/components/ui/thumbnail";
 import type { Article, Category, Tag } from "@/types/database";
 
 interface ArticleCardProps {
@@ -33,13 +33,14 @@ function FeaturedCard({ article, className, priority = true }: { article: Articl
     >
       <div className="absolute inset-0 overflow-hidden">
         {article.thumbnail_url ? (
-          <Image
+          <Thumbnail
             src={article.thumbnail_url}
             alt={article.title}
             fill
             className="object-cover transition-transform duration-700 ease-out group-hover:scale-[1.03]"
             sizes="(max-width: 768px) 100vw, 60vw"
             priority={priority}
+            fallbackClassName="h-full w-full bg-gradient-to-br from-primary/20 via-accent/10 to-muted"
           />
         ) : (
           <div className="h-full w-full bg-gradient-to-br from-primary/20 via-accent/10 to-muted" />
@@ -89,7 +90,7 @@ function DefaultCard({ article, className, priority = false }: { article: Articl
     >
       <div className="relative aspect-[16/10] overflow-hidden bg-muted">
         {article.thumbnail_url ? (
-          <Image
+          <Thumbnail
             src={article.thumbnail_url}
             alt={article.title}
             fill
@@ -136,7 +137,7 @@ function CompactCard({ article, className }: { article: ArticleCardProps["articl
     >
       <div className="relative size-24 shrink-0 overflow-hidden rounded-lg bg-muted">
         {article.thumbnail_url ? (
-          <Image src={article.thumbnail_url} alt={article.title} fill className="object-cover" sizes="96px" />
+          <Thumbnail src={article.thumbnail_url} alt={article.title} fill className="object-cover" sizes="96px" />
         ) : (
           <div className="h-full w-full bg-gradient-to-br from-muted to-muted/50" />
         )}

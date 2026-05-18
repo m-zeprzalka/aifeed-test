@@ -1,6 +1,6 @@
 import { ArrowRight } from "lucide-react";
 import Link from "next/link";
-import Image from "next/image";
+import { Thumbnail } from "@/components/ui/thumbnail";
 import { ArticleCard } from "@/components/articles/article-card";
 import { TrendingTags } from "@/components/layout/trending-tags";
 import { siteConfig } from "@/config/site";
@@ -138,7 +138,7 @@ export default async function HomePage() {
                     >
                       <div className="relative aspect-[16/10] overflow-hidden bg-muted">
                         {article.thumbnail_url ? (
-                          <Image
+                          <Thumbnail
                             src={article.thumbnail_url}
                             alt={article.title}
                             fill

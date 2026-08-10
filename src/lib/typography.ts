@@ -10,9 +10,10 @@
  *     using simple boundary heuristics (open after whitespace/start, close
  *     after a letter/digit).
  *
- * Runs OUTSIDE markdown code blocks and link/image syntax so it never touches
- * URLs, code fences, or anchor text. Designed to be idempotent: running it
- * twice gives the same result as running it once.
+ * Runs OUTSIDE markdown code blocks, link/image destinations (`](url)`) and
+ * bare URLs, so it never corrupts a URL or code fence (anchor text still gets
+ * typography). Designed to be idempotent: running it twice gives the same
+ * result as running it once.
  */
 export function polishTypography(input: string): string {
   const segments = splitProtectingCode(input);
@@ -26,12 +27,17 @@ interface Segment {
   isCode: boolean;
 }
 
-// Split the input on fenced code blocks (``` ... ```) and inline code (`...`).
-// Code segments are returned untouched; everything else is fair game for
-// typographic substitution.
+// Split the input on segments that must stay byte-identical:
+//   - fenced code blocks (``` ... ```) and inline code (`...`),
+//   - markdown link/image destinations `](url)` — anchor text PRZED `](`
+//     nadal dostaje typografię, sam URL nie,
+//   - bare URLs (https://...).
+// Bez ochrony URL-i reguła "digit-hyphen-digit → en-dash" przepisywała
+// `https://site.com/2024-01-15/x` na `2024–01–15` i obowiązkowy link do
+// źródła kończył jako 404.
 function splitProtectingCode(input: string): Segment[] {
   const out: Segment[] = [];
-  const pattern = /```[\s\S]*?```|`[^`\n]*`/g;
+  const pattern = /```[\s\S]*?```|`[^`\n]*`|\]\([^)]*\)|https?:\/\/[^\s)]+/g;
   let lastIndex = 0;
   for (const match of input.matchAll(pattern)) {
     const start = match.index ?? 0;

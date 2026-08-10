@@ -60,7 +60,7 @@ async function runPipeline(request: NextRequest) {
     console.log(`Found ${scrapedItems.length} items`);
 
     // Step 2: Deduplicate against already-processed items
-    const { data: existingItems } = await supabase
+    const { data: existingItems, error: dedupError } = await supabase
       .from("scraped_items")
       .select("source_url")
       .in(
@@ -68,13 +68,31 @@ async function runPipeline(request: NextRequest) {
         scrapedItems.map((i) => i.url)
       );
 
+    // Błąd dedupe = STOP. Zignorowany błąd oznaczałby pustą listę
+    // `existingUrls`, a wtedy cały batch zostałby uznany za nowy i
+    // opublikowany DRUGI raz. Lepiej stracić jeden run niż zdublować serwis.
+    if (dedupError) {
+      await logPipelineEvent(runId, "run_end", {
+        generated: 0,
+        rejected: 0,
+        failed: 0,
+        aborted: 0,
+        duration_ms: Date.now() - runStartedAt,
+        pipeline_error: `dedup query failed: ${dedupError.message}`,
+      });
+      return Response.json(
+        { error: "Dedup query failed — aborting to avoid duplicate publishing", details: dedupError.message, run_id: runId },
+        { status: 500 }
+      );
+    }
+
     const existingUrls = new Set((existingItems || []).map((i) => i.source_url));
     const newItems = scrapedItems.filter((i) => !existingUrls.has(i.url));
     console.log(`${newItems.length} new items after deduplication`);
 
-    // Step 3: Select top articles (configurable via ?count=N, default 10)
+    // Step 3: Select top articles (configurable via ?count=N ∈ [1,15], default 4)
     const url = new URL(request.url);
-    const count = Math.min(parseInt(url.searchParams.get("count") || "10", 10) || 10, 15);
+    const count = Math.min(Math.max(parseInt(url.searchParams.get("count") || "4", 10) || 4, 1), 15);
     const topItems = selectTopArticles(newItems, count);
 
     // Telemetria: zapis startu — dashboard /admin grupuje eventy po `run_id`.
@@ -107,6 +125,14 @@ async function runPipeline(request: NextRequest) {
     // only when the AI quality score is ≥ 80 (excellent, not just passing).
     // Without these guards `is_featured` flips on every cron run and pollutes
     // sitemap priority signals + the "wyróżniony" hero on the home page.
+    // Katalog popularnych tagów — raz na run, przekazywany do promptu, żeby
+    // AI wybierało z istniejącej taksonomii zamiast płodzić warianty pisowni
+    // (root cause rozdrobnienia katalogu: ~73% tagów z 1 artykułem).
+    const { data: popularTagRows } = await supabase.rpc("popular_tags", { tag_limit: 60 });
+    const existingTags: string[] = Array.isArray(popularTagRows)
+      ? popularTagRows.map((t: { name: string }) => t.name).filter(Boolean)
+      : [];
+
     const QUALITY_FEATURED_THRESHOLD = 80;
     const startOfTodayUtc = new Date();
     startOfTodayUtc.setUTCHours(0, 0, 0, 0);
@@ -156,7 +182,7 @@ async function runPipeline(request: NextRequest) {
           continue;
         }
 
-        const article = await generateArticle(item.title, [item.url], [item.description], sourceContent, runId);
+        const article = await generateArticle(item.title, [item.url], [item.description], sourceContent, runId, existingTags);
 
         // Validate AI response — reject refusals and garbage
         const refusalPatterns = ["nie można przetworzyć", "nie mogę", "brak treści", "brak czytelnej"];
@@ -253,27 +279,11 @@ async function runPipeline(request: NextRequest) {
           continue;
         }
 
-        // Handle tags — upsert each tag then link to article
-        for (const tagName of article.tags) {
-          const tagSlug = slugify(tagName, { lower: true, strict: true, locale: "pl" });
-
-          const { data: tag } = await supabase
-            .from("tags")
-            .upsert({ name: tagName, slug: tagSlug }, { onConflict: "slug" })
-            .select("id")
-            .single();
-
-          if (tag) {
-            await supabase
-              .from("article_tags")
-              .upsert(
-                { article_id: insertedArticle.id, tag_id: tag.id },
-                { onConflict: "article_id,tag_id" }
-              );
-          }
-        }
-
-        // Mark source as processed
+        // Mark source as processed NATYCHMIAST po udanym insercie artykułu —
+        // zanim ruszą tagi. Gdy funkcja padnie (wyjątek / ścięcie na 300s)
+        // między insertem a tym upsertem, następny cron widziałby URL jako
+        // "nowy" i opublikował duplikat. Ta kolejność zwęża okno duplikacji
+        // z sekund (pętla tagów) do pojedynczego round-tripu.
         await supabase.from("scraped_items").upsert(
           {
             source_url: item.url,
@@ -283,6 +293,28 @@ async function runPipeline(request: NextRequest) {
             is_processed: true,
           },
           { onConflict: "source_url" }
+        );
+
+        // Handle tags — upserts are independent per tag, run them in parallel.
+        await Promise.all(
+          article.tags.map(async (tagName) => {
+            const tagSlug = slugify(tagName, { lower: true, strict: true, locale: "pl" });
+
+            const { data: tag } = await supabase
+              .from("tags")
+              .upsert({ name: tagName, slug: tagSlug }, { onConflict: "slug" })
+              .select("id")
+              .single();
+
+            if (tag) {
+              await supabase
+                .from("article_tags")
+                .upsert(
+                  { article_id: insertedArticle.id, tag_id: tag.id },
+                  { onConflict: "article_id,tag_id" }
+                );
+            }
+          })
         );
 
         generated.push(article.title);

@@ -29,6 +29,27 @@ type ThumbnailProps = Omit<ImageProps, "onError"> & {
  * hero w artykule, layouty home). Dla obrazków własnych z `/public` użyj
  * bezpośrednio `next/image`.
  */
+/**
+ * Optymalizację (`/_next/image` → resize + WebP/AVIF + srcset) włączamy
+ * WYŁĄCZNIE dla obrazów z własnego Supabase Storage (miniatury AI):
+ * kontrolujemy ich format, więc optymalizator ich nie psuje, a to one są
+ * LCP na stronie artykułu. Scrape'owane obrazy z domen zewnętrznych lecą
+ * `unoptimized` — historycznie optymalizator Vercela re-enkodował część
+ * z nich do pustych/zepsutych plików, stąd ta selektywność.
+ */
+function isSupabaseStorageUrl(src: ImageProps["src"]): boolean {
+  if (typeof src !== "string") return false;
+  try {
+    const host = new URL(src).hostname;
+    const own = process.env.NEXT_PUBLIC_SUPABASE_URL
+      ? new URL(process.env.NEXT_PUBLIC_SUPABASE_URL).hostname
+      : null;
+    return host === own || host.endsWith(".supabase.co");
+  } catch {
+    return false;
+  }
+}
+
 export function Thumbnail({
   fallbackClassName = "h-full w-full bg-gradient-to-br from-muted to-muted/50",
   alt,
@@ -42,6 +63,7 @@ export function Thumbnail({
     <Image
       {...imageProps}
       alt={alt}
+      unoptimized={!isSupabaseStorageUrl(imageProps.src)}
       referrerPolicy="no-referrer"
       onError={() => setFailed(true)}
     />

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { slugifyHeading } from "@/lib/heading-id";
+import { slugifyHeading, stripInlineMarkdown } from "@/lib/heading-id";
 
 interface TocItem {
   id: string;
@@ -11,11 +11,22 @@ interface TocItem {
 
 function extractHeadings(markdown: string): TocItem[] {
   const headings: TocItem[] = [];
+  let inCodeFence = false;
   for (const line of markdown.split("\n")) {
+    // `## coś` wewnątrz bloku ``` to kod (np. komentarz bash), nie nagłówek.
+    if (/^```/.test(line.trim())) {
+      inCodeFence = !inCodeFence;
+      continue;
+    }
+    if (inCodeFence) continue;
+
     const match = line.match(/^(#{2,3})\s+(.+)/);
     if (match) {
       const level = match[1].length;
-      const text = match[2].trim();
+      // Strip inline markdown PRZED slugify — renderer po swojej stronie
+      // widzi już czysty tekst (React children), więc obie strony muszą
+      // slugifikować ten sam string.
+      const text = stripInlineMarkdown(match[2].trim());
       headings.push({ id: slugifyHeading(text), text, level });
     }
   }

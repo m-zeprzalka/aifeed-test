@@ -81,24 +81,6 @@ export async function getArticles(limit = 10): Promise<ArticleWithRelations[]> {
   return attachTagsBatch(articles);
 }
 
-export async function getFeaturedArticles(): Promise<ArticleWithRelations[]> {
-  const { data: articles, error } = await db()
-    .from("articles")
-    .select("*, category:categories(*)")
-    .eq("is_published", true)
-    .eq("is_featured", true)
-    .order("published_at", { ascending: false })
-    .limit(5);
-
-  if (error) {
-    console.error("[data] getFeaturedArticles failed:", error.message);
-    return [];
-  }
-  if (!articles || articles.length === 0) return [];
-
-  return attachTagsBatch(articles);
-}
-
 export async function getArticleBySlug(slug: string): Promise<ArticleWithRelations | null> {
   const { data: article, error } = await db()
     .from("articles")
@@ -114,39 +96,6 @@ export async function getArticleBySlug(slug: string): Promise<ArticleWithRelatio
   if (!article) return null;
 
   return attachTags(article);
-}
-
-/**
- * Fetch articles for a category (non-paginated). Bounded by `limit` to
- * prevent unbounded responses as the dataset grows.
- */
-export async function getArticlesByCategory(
-  categorySlug: string,
-  limit = 50
-): Promise<ArticleWithRelations[]> {
-  const { data: category, error: catError } = await db()
-    .from("categories")
-    .select("id")
-    .eq("slug", categorySlug)
-    .maybeSingle();
-
-  if (catError || !category) return [];
-
-  const { data: articles, error } = await db()
-    .from("articles")
-    .select("*, category:categories(*)")
-    .eq("is_published", true)
-    .eq("category_id", category.id)
-    .order("published_at", { ascending: false })
-    .limit(limit);
-
-  if (error) {
-    console.error("[data] getArticlesByCategory failed:", error.message);
-    return [];
-  }
-  if (!articles || articles.length === 0) return [];
-
-  return attachTagsBatch(articles);
 }
 
 export interface PaginatedResult {
@@ -171,13 +120,11 @@ export async function getArticlesByCategoryPaginated(
 ): Promise<PaginatedResult> {
   const safePage = Math.max(1, Math.floor(page) || 1);
 
-  const { data: category, error: catError } = await db()
-    .from("categories")
-    .select("id")
-    .eq("slug", categorySlug)
-    .maybeSingle();
+  // `getCategoryBySlug` jest owinięte w React cache() — generateMetadata,
+  // page i ta funkcja współdzielą jeden query na request.
+  const category = await getCategoryBySlug(categorySlug);
 
-  if (catError || !category) {
+  if (!category) {
     return { articles: [], page: safePage, pageSize, total: 0, totalPages: 0, hasPrev: false, hasNext: false };
   }
 
@@ -201,7 +148,11 @@ export async function getArticlesByCategoryPaginated(
     .select("*, category:categories(*)")
     .eq("is_published", true)
     .eq("category_id", category.id)
+    // Tiebreaker po `id` — bez niego artykuły publikowane w tej samej sekundzie
+    // mogą się przesuwać między stronami paginacji między requestami
+    // (duplikaty/przeskoki dla użytkownika i crawlera).
     .order("published_at", { ascending: false })
+    .order("id", { ascending: false })
     .range(from, to);
 
   if (error || !articles || articles.length === 0) {
@@ -239,7 +190,10 @@ export const getCategories = cache(async (): Promise<Category[]> => {
   return data || [];
 });
 
-export async function getCategoryBySlug(slug: string): Promise<Category | null> {
+// cache() — generateMetadata + page + getArticlesByCategoryPaginated wołają
+// to w tym samym request'cie; bez dedupe każdy render kategorii robił 3×
+// ten sam SELECT.
+export const getCategoryBySlug = cache(async (slug: string): Promise<Category | null> => {
   const { data, error } = await db()
     .from("categories")
     .select("*")
@@ -251,7 +205,7 @@ export async function getCategoryBySlug(slug: string): Promise<Category | null> 
     return null;
   }
   return data;
-}
+});
 
 /**
  * Wyszukiwarka. Strategia dwustopniowa:
@@ -276,12 +230,15 @@ export async function searchArticles(query: string): Promise<ArticleWithRelation
 
   let articles: (Article & { category: Category | null })[] = [];
 
-  // Stage 1: FTS
+  // Stage 1: FTS. `config: "simple"` MUSI się zgadzać z konfiguracją, którą
+  // zbudowano `search_vector` (migracja 004) — bez tego parametru zapytanie
+  // parsuje domyślny słownik `english`, którego stopwordy połykają krótkie
+  // polskie słowa ("i", "a", "to", "do", "on"...).
   const ftsRes = await db()
     .from("articles")
     .select("*, category:categories(*)")
     .eq("is_published", true)
-    .textSearch("search_vector", tsQuery)
+    .textSearch("search_vector", tsQuery, { config: "simple" })
     .order("published_at", { ascending: false })
     .limit(20);
 
@@ -293,13 +250,17 @@ export async function searchArticles(query: string): Promise<ArticleWithRelation
     articles = ftsRes.data;
   }
 
-  // Stage 2: trigram ILIKE fallback przy 0 wyników z FTS.
+  // Stage 2: trigram ILIKE fallback przy 0 wyników z FTS. Celowo na SUROWYM
+  // (przyciętym) zapytaniu, nie na wyniku sanitizeTsQuery — sanitizer wycina
+  // interpunkcję, więc "open-source" stałoby się "open source" i ILIKE nigdy
+  // nie trafiłoby tytułu zawierającego myślnik. escapeIlike wystarcza tu
+  // za całą sanityzację (parametr jest bindowany, nie sklejany w SQL).
   if (articles.length === 0) {
     const ilikeRes = await db()
       .from("articles")
       .select("*, category:categories(*)")
       .eq("is_published", true)
-      .ilike("title", `%${escapeIlike(safe)}%`)
+      .ilike("title", `%${escapeIlike(query.trim())}%`)
       .order("published_at", { ascending: false })
       .limit(20);
     if (ilikeRes.error) {
@@ -315,8 +276,14 @@ export async function searchArticles(query: string): Promise<ArticleWithRelation
 }
 
 /**
- * Optimized: single query to fetch articles for multiple categories
- * instead of N separate getArticlesByCategory calls.
+ * Articles for the home page category sections: one small indexed query per
+ * category, in parallel, then a single batched tag fetch.
+ *
+ * Wcześniejsza wersja ciągnęła jedną wspólną pulę 360 najnowszych artykułów
+ * i grupowała w pamięci — kategoria, której najnowszy artykuł wypadł poza
+ * pulą (≈ miesiąc bez publikacji), znikała z home w całości. Per-kategoria
+ * limit nie ma tej wady i jest tańszy (6 × `limit 4` na indeksie zamiast
+ * jednego skanu 360 rzędów).
  */
 export async function getArticlesGroupedByCategory(
   categorySlugs: string[],
@@ -329,46 +296,36 @@ export async function getArticlesGroupedByCategory(
 
   if (catError || !categories || categories.length === 0) return {};
 
-  const categoryIds = categories.map((c) => c.id);
-  const slugById = new Map(categories.map((c) => [c.id, c.slug]));
-
-  // Bounded pull: at most N categories × 10× per-category limit — plenty of
-  // headroom to fill the per-category quota without scanning the whole table.
-  const pullLimit = Math.max(categoryIds.length * limitPerCategory * 10, 200);
-
-  const { data: articles, error } = await db()
-    .from("articles")
-    .select("*, category:categories(*)")
-    .eq("is_published", true)
-    .in("category_id", categoryIds)
-    .order("published_at", { ascending: false })
-    .limit(pullLimit);
-
-  if (error || !articles || articles.length === 0) return {};
-
-  // Group by category and limit
-  const grouped = new Map<string, (Article & { category: Category | null })[]>();
-  for (const article of articles) {
-    const slug = slugById.get(article.category_id);
-    if (!slug) continue;
-    const existing = grouped.get(slug) || [];
-    if (existing.length < limitPerCategory) {
-      existing.push(article);
-      grouped.set(slug, existing);
-    }
-  }
+  const perCategory = await Promise.all(
+    categories.map(async (cat) => {
+      const { data, error } = await db()
+        .from("articles")
+        .select("*, category:categories(*)")
+        .eq("is_published", true)
+        .eq("category_id", cat.id)
+        .order("published_at", { ascending: false })
+        .order("id", { ascending: false })
+        .limit(limitPerCategory);
+      if (error) {
+        console.error(`[data] getArticlesGroupedByCategory(${cat.slug}) failed:`, error.message);
+        return { slug: cat.slug, articles: [] };
+      }
+      return { slug: cat.slug, articles: data ?? [] };
+    })
+  );
 
   // Batch tags for all articles at once
-  const allArticles = [...grouped.values()].flat();
+  const allArticles = perCategory.flatMap((g) => g.articles);
   const withTags = await attachTagsBatch(allArticles);
-
-  // Re-group tagged articles
   const taggedMap = new Map(withTags.map((a) => [a.id, a]));
-  const result: Record<string, ArticleWithRelations[]> = {};
-  for (const [slug, arts] of grouped) {
-    result[slug] = arts.map((a) => taggedMap.get(a.id)!).filter(Boolean);
-  }
 
+  const result: Record<string, ArticleWithRelations[]> = {};
+  for (const group of perCategory) {
+    if (group.articles.length === 0) continue;
+    result[group.slug] = group.articles
+      .map((a) => taggedMap.get(a.id))
+      .filter((a): a is ArticleWithRelations => Boolean(a));
+  }
   return result;
 }
 
@@ -416,19 +373,37 @@ export const getPopularTags = cache(async (limit = 10): Promise<Tag[]> => {
   return topTagIds.map((id) => tagMap.get(id)).filter(Boolean) as Tag[];
 });
 
+/**
+ * Slugs for the sitemap, paged in 1000-row batches.
+ *
+ * WAŻNE: PostgREST (Supabase) tnie KAŻDĄ odpowiedź do server-side
+ * `db-max-rows` (domyślnie 1000) niezależnie od `.limit()`. Pojedyncze
+ * `.limit(5000)` zwracało dokładnie 1000 rzędów — przy >1000 artykułów
+ * sitemap po cichu gubił wszystkie starsze. Stronicujemy przez `.range()`.
+ */
 export async function getSitemapArticles(limit = 5000): Promise<{ slug: string; updated_at: string; is_featured: boolean }[]> {
-  const { data, error } = await db()
-    .from("articles")
-    .select("slug, updated_at, is_featured")
-    .eq("is_published", true)
-    .order("published_at", { ascending: false })
-    .limit(limit);
+  const BATCH = 1000;
+  const all: { slug: string; updated_at: string; is_featured: boolean }[] = [];
 
-  if (error) {
-    console.error("[data] getSitemapArticles failed:", error.message);
-    return [];
+  for (let from = 0; from < limit; from += BATCH) {
+    const to = Math.min(from + BATCH, limit) - 1;
+    const { data, error } = await db()
+      .from("articles")
+      .select("slug, updated_at, is_featured")
+      .eq("is_published", true)
+      .order("published_at", { ascending: false })
+      .order("id", { ascending: false })
+      .range(from, to);
+
+    if (error) {
+      console.error("[data] getSitemapArticles failed:", error.message);
+      break;
+    }
+    all.push(...(data ?? []));
+    // Niepełny batch = koniec danych.
+    if (!data || data.length < to - from + 1) break;
   }
-  return data || [];
+  return all;
 }
 
 export const getTickerArticles = cache(async (limit = 10): Promise<{ title: string; slug: string }[]> => {
@@ -448,7 +423,8 @@ export const getTickerArticles = cache(async (limit = 10): Promise<{ title: stri
 
 // ===================== TAG PAGES =====================
 
-export async function getTagBySlug(slug: string): Promise<Tag | null> {
+// cache() — generateMetadata, page i getArticlesByTag wołają to 3× na request.
+export const getTagBySlug = cache(async (slug: string): Promise<Tag | null> => {
   const { data, error } = await db()
     .from("tags")
     .select("*")
@@ -460,7 +436,7 @@ export async function getTagBySlug(slug: string): Promise<Tag | null> {
     return null;
   }
   return data;
-}
+});
 
 export async function getArticlesByTag(tagSlug: string, limit = 50): Promise<ArticleWithRelations[]> {
   const tag = await getTagBySlug(tagSlug);
@@ -634,7 +610,10 @@ export async function getRelatedArticles(
       console.error("[data] getRelatedArticles failed:", error.message);
       return [];
     }
-    if (!articles || articles.length < count) continue;
+    // Za mało kandydatów → poszerz okno czasowe. W ostatnim oknie (all-time)
+    // bierzemy co jest — lepiej pokazać 2 podobne niż ukryć sekcję.
+    if (!articles || articles.length === 0) continue;
+    if (articles.length < count && days !== null) continue;
 
     // Fisher-Yates shuffle, then take `count`.
     const pool = [...articles];
@@ -654,73 +633,32 @@ export async function getRelatedArticles(
  * Per-category max(updated_at). Used by sitemap.ts so each category URL gets
  * a `lastModified` reflecting its actual content. Without this, every crawl
  * sees `new Date()` and Google wastes budget on un-changed pages.
+ *
+ * One tiny indexed query per category (6 total) instead of pulling every
+ * published article into memory — the previous approach scaled O(n) with the
+ * article count on every sitemap render.
  */
 export async function getCategoriesLastModified(): Promise<Record<string, Date>> {
-  const { data, error } = await db()
-    .from("articles")
-    .select("category_id, updated_at, categories!inner(slug)")
-    .eq("is_published", true)
-    .order("updated_at", { ascending: false });
+  const categories = await getCategories();
+  if (categories.length === 0) return {};
 
-  if (error || !data) return {};
+  const results = await Promise.all(
+    categories.map(async (cat) => {
+      const { data } = await db()
+        .from("articles")
+        .select("updated_at")
+        .eq("is_published", true)
+        .eq("category_id", cat.id)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      return [cat.slug, data?.updated_at] as const;
+    })
+  );
 
-  type CategoryJoinRow = {
-    updated_at: string;
-    categories: { slug: string } | { slug: string }[] | null;
-  };
-  const seen = new Map<string, Date>();
-  for (const row of data as unknown as CategoryJoinRow[]) {
-    const cats = Array.isArray(row.categories) ? row.categories : row.categories ? [row.categories] : [];
-    for (const cat of cats) {
-      if (!cat?.slug) continue;
-      if (!seen.has(cat.slug)) seen.set(cat.slug, new Date(row.updated_at));
-    }
+  const seen: Record<string, Date> = {};
+  for (const [slug, updatedAt] of results) {
+    if (updatedAt) seen[slug] = new Date(updatedAt);
   }
-  return Object.fromEntries(seen);
-}
-
-/**
- * Per-tag max(updated_at) — same purpose as the category variant above.
- */
-export async function getTagsLastModified(): Promise<Record<string, Date>> {
-  const { data, error } = await db()
-    .from("article_tags")
-    .select("tag:tags(slug), article:articles!inner(updated_at, is_published)")
-    .order("article(updated_at)", { ascending: false });
-
-  if (error || !data) return {};
-
-  type ArticleJoin = { updated_at: string; is_published: boolean };
-  type TagJoin = { slug: string };
-  type Row = {
-    tag: TagJoin | TagJoin[] | null;
-    article: ArticleJoin | ArticleJoin[] | null;
-  };
-  const seen = new Map<string, Date>();
-  for (const row of data as unknown as Row[]) {
-    const articles = Array.isArray(row.article) ? row.article : row.article ? [row.article] : [];
-    const tags = Array.isArray(row.tag) ? row.tag : row.tag ? [row.tag] : [];
-    const article = articles[0];
-    if (!article || article.is_published === false) continue;
-    for (const tag of tags) {
-      if (!tag?.slug) continue;
-      if (!seen.has(tag.slug)) seen.set(tag.slug, new Date(article.updated_at));
-    }
-  }
-  return Object.fromEntries(seen);
-}
-
-// ===================== ALL TAGS (for sitemap) =====================
-
-export async function getAllTags(): Promise<Tag[]> {
-  const { data, error } = await db()
-    .from("tags")
-    .select("*")
-    .order("name");
-
-  if (error) {
-    console.error("[data] getAllTags failed:", error.message);
-    return [];
-  }
-  return data || [];
+  return seen;
 }

@@ -32,7 +32,7 @@ export function assessArticleQuality(article: GeneratedArticle): QualityResult {
     issues.push("brak linku do źródła");
   }
 
-  // Word count — minimum 200 words for a publishable article
+  // Word count — <100 słów to twarda kara (-35), 100-199 miękka (-20)
   const wordCount = article.content.split(/\s+/).length;
   if (wordCount < 100) {
     score -= 35;

@@ -20,10 +20,13 @@ const supabaseRemotePatterns = parseSupabaseHostname();
 const nextConfig: NextConfig = {
   reactCompiler: true,
   images: {
-    // Image optimization (`/_next/image`) is disabled globally. Vercel's
-    // optimizer was re-encoding scraped thumbnails into broken/blank outputs
-    // for some sources, so we serve every image as-is from its origin URL.
-    unoptimized: true,
+    // Optymalizacja jest sterowana per-obraz w `components/ui/thumbnail.tsx`:
+    // własne miniatury z Supabase Storage → optymalizowane (resize + WebP,
+    // to one są LCP artykułu); scrape'owane obrazy z domen zewnętrznych →
+    // `unoptimized` (optymalizator Vercela psuł część z nich). Globalne
+    // `unoptimized: true` celowo USUNIĘTE — wyłączało optymalizację również
+    // tam, gdzie jest bezpieczna i potrzebna.
+    qualities: [75, 85],
     remotePatterns: [
       // Supabase Storage — domena rozwiązywana z env w runtime (kasujemy
       // hardcoded ref projektu z kodu); fallback `*.supabase.co` pokrywa
@@ -56,9 +59,10 @@ const nextConfig: NextConfig = {
       { protocol: "https", hostname: "**" },
     ],
   },
-  // 301 redirects for the English → Polish URL migration. External links,
-  // Google index, RSS readers and newsletter archives that still reference
-  // the old paths land on the Polish canonical instead of a 404.
+  // Permanent (308) redirects for the English → Polish URL migration.
+  // External links, Google index, RSS readers and newsletter archives that
+  // still reference the old paths land on the Polish canonical instead of
+  // a 404. (Next emits 308, not 301 — SEO-equivalent.)
   async redirects() {
     return [
       { source: "/article/:slug", destination: "/artykul/:slug", permanent: true },

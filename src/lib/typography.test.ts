@@ -73,4 +73,18 @@ describe("polishTypography", () => {
     const formatted = `5${NBSP}km`;
     expect(polishTypography(formatted)).toBe(formatted);
   });
+
+  it("never rewrites digits inside markdown link destinations", () => {
+    const input = "Zobacz [raport 10-15](https://site.com/2024-01-15/report) dziś";
+    expect(polishTypography(input)).toBe(
+      "Zobacz [raport 10–15](https://site.com/2024-01-15/report) dziś"
+    );
+  });
+
+  it("never rewrites digits inside bare URLs", () => {
+    const input = "Źródło: https://example.com/2023-12-01 oraz tekst 1-2";
+    expect(polishTypography(input)).toBe(
+      "Źródło: https://example.com/2023-12-01 oraz tekst 1–2"
+    );
+  });
 });

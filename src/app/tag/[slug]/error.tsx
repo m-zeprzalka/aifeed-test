@@ -2,14 +2,14 @@
 
 import { RouteError } from "@/components/ui/route-error";
 
-export default function ArticleError(props: {
+export default function TagError(props: {
   error: Error & { digest?: string };
   reset: () => void;
 }) {
   return (
     <RouteError
       {...props}
-      description="Nie udało się załadować artykułu. Spróbuj ponownie lub wróć do strony głównej."
+      description="Nie udało się załadować artykułów z tego tagu. Spróbuj ponownie lub wróć do strony głównej."
     />
   );
 }

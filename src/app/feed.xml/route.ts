@@ -35,7 +35,11 @@ export async function GET() {
   const items = articles
     .map((a) => {
       const articleUrl = escapeXml(`${baseUrl}/artykul/${a.slug}`);
-      const pubDate = a.published_at ? new Date(a.published_at).toUTCString() : "";
+      // Pusty <pubDate></pubDate> to niepoprawny RFC-822 — część walidatorów
+      // odrzuca cały item. Brak daty → element pomijamy w całości.
+      const pubDateTag = a.published_at
+        ? `\n    <pubDate>${new Date(a.published_at).toUTCString()}</pubDate>`
+        : "";
       const categoryTag = a.category
         ? `\n    <category>${escapeXml(a.category.name)}</category>`
         : "";
@@ -46,8 +50,7 @@ export async function GET() {
       return `<item>
     <title>${cdata(a.title)}</title>
     <link>${articleUrl}</link>
-    <description>${cdata(a.excerpt)}</description>
-    <pubDate>${pubDate}</pubDate>
+    <description>${cdata(a.excerpt)}</description>${pubDateTag}
     <guid isPermaLink="true">${articleUrl}</guid>
     <dc:creator>AiFeed</dc:creator>${categoryTag}${enclosureTag}
   </item>`;
@@ -61,7 +64,7 @@ export async function GET() {
   <link>${escapeXml(baseUrl)}</link>
   <description>${cdata(siteConfig.description)}</description>
   <language>pl-PL</language>
-  <managingEditor>redakcja@aifeed.pl (AiFeed)</managingEditor>
+  <managingEditor>kontakt@aifeed.pl (AiFeed)</managingEditor>
   <atom:link href="${escapeXml(`${baseUrl}/feed.xml`)}" rel="self" type="application/rss+xml"/>
   <lastBuildDate>${new Date().toUTCString()}</lastBuildDate>
   <image>

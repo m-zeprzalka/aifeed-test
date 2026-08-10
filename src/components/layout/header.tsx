@@ -48,10 +48,15 @@ export function Header() {
         setSearchOpen((prev) => !prev);
         return;
       }
-      // "/" — open search (skip when typing in inputs/textareas)
+      // "/" — open search. Skip when typing in any editable context
+      // (input/textarea/select/contentEditable), during IME composition,
+      // and when modifiers are held (Ctrl+/ etc. to nie nasz skrót).
       if (e.key === "/" && !searchOpen) {
-        const tag = (e.target as HTMLElement | null)?.tagName;
-        if (tag === "INPUT" || tag === "TEXTAREA") return;
+        if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
+        const target = e.target as HTMLElement | null;
+        const tag = target?.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+        if (target?.isContentEditable) return;
         e.preventDefault();
         setSearchOpen(true);
         return;

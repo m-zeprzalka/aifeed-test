@@ -137,12 +137,25 @@ export function NewsTicker({ items }: NewsTickerProps) {
   // `mouseenter` on tap without a reliable matching `mouseleave` once the user
   // navigates away — leaving the marquee frozen across route changes. Gate the
   // handlers on the actual pointer type so phones never pause.
+  //
+  // Pause-on-focus (WCAG 2.2.2): klawiaturowy użytkownik tabujący po linkach
+  // tickera dostaje zatrzymany marquee — bez tego linki fizycznie uciekają
+  // spod fokusa. onFocus/onBlur w React bąbelkują (odpowiednik focusin/out).
   const handlePointerEnter = (e: React.PointerEvent) => {
     if (e.pointerType !== "mouse") return;
     animationRef.current?.pause();
   };
   const handlePointerLeave = (e: React.PointerEvent) => {
     if (e.pointerType !== "mouse") return;
+    animationRef.current?.play();
+  };
+  const handleFocusIn = () => {
+    animationRef.current?.pause();
+  };
+  const handleFocusOut = (e: React.FocusEvent) => {
+    // Wznów tylko gdy fokus faktycznie opuścił ticker (nie przeskok
+    // między linkami wewnątrz).
+    if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
     animationRef.current?.play();
   };
 
@@ -154,6 +167,8 @@ export function NewsTicker({ items }: NewsTickerProps) {
       className="border-b border-border bg-foreground overflow-hidden p-1"
       onPointerEnter={handlePointerEnter}
       onPointerLeave={handlePointerLeave}
+      onFocus={handleFocusIn}
+      onBlur={handleFocusOut}
     >
       {/* Visually-hidden landmark heading. Screen readers can jump to the
           ticker by region; sighted users still see the marquee directly. */}

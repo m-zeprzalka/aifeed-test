@@ -176,13 +176,23 @@ export function categoryMetadata(category: Category, page = 1): Metadata {
   });
 }
 
+/**
+ * Strony tagów są `noindex, follow`. Katalog tagów tworzy pipeline AI i jest
+ * silnie rozdrobniony (w produkcji ~73% tagów ma dokładnie 1 artykuł) — to
+ * tysiące thin-content URL-i, które liczebnie przygniatają realne artykuły
+ * i wyglądają dla Google jak scaled content abuse. `follow: true` zachowuje
+ * tagi jako ścieżki crawlowania do artykułów; z sitemapy są usunięte.
+ * Odwrót (przywrócenie indeksacji) ma sens dopiero po skonsolidowaniu
+ * katalogu tagów i dodaniu na nie realnej treści.
+ */
 export function tagMetadata(tag: Tag): Metadata {
-  return buildPageMetadata({
+  const base = buildPageMetadata({
     title: `#${tag.name}`,
     description: `Artykuły oznaczone tagiem #${tag.name} — wiadomości i analizy AI na ${siteConfig.name}.`,
     path: `/tag/${tag.slug}`,
     ogType: "website",
   });
+  return { ...base, robots: { index: false, follow: true } };
 }
 
 export function articleMetadata(
@@ -268,7 +278,14 @@ export function buildItemListJsonLd(params: {
   totalItems: number;
   /** Items wyświetlone na stronie (max ~20 — Google limit) */
   items: Array<{ slug: string; title: string }>;
+  /**
+   * Offset pozycji dla paginacji: strona 2 przy pageSize=12 → 12, żeby
+   * `position` odzwierciedlało miejsce w CAŁEJ kolekcji, nie restartowało
+   * od 1 na każdej stronie.
+   */
+  startPosition?: number;
 }) {
+  const offset = params.startPosition ?? 0;
   return {
     "@context": "https://schema.org",
     "@type": "CollectionPage",
@@ -280,7 +297,7 @@ export function buildItemListJsonLd(params: {
       numberOfItems: params.totalItems,
       itemListElement: params.items.slice(0, 20).map((article, i) => ({
         "@type": "ListItem",
-        position: i + 1,
+        position: offset + i + 1,
         url: `${siteConfig.url}/artykul/${article.slug}`,
         name: article.title,
       })),

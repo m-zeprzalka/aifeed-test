@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { SEARCH_QUERY_MAX_LENGTH } from "@/lib/search-utils";
+import { useArticleSearch } from "@/lib/hooks/use-article-search";
 
 interface SearchResult {
   id: string;
@@ -54,15 +55,15 @@ function pushRecent(q: string): string[] {
 
 export function SearchModal({ open, onOpenChange }: SearchModalProps) {
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<SearchResult[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [recent, setRecent] = useState<string[]>([]);
-
-  // Load recent on first open. Reading on every render would force a re-read
-  // of localStorage even when the modal is closed.
-  useEffect(() => {
-    if (open) setRecent(readRecent());
-  }, [open]);
+  // Debounce/abort/error — wspólny hook z /szukaj
+  // (`src/lib/hooks/use-article-search.ts`).
+  const { results, loading, error } = useArticleSearch<SearchResult>(query, 400);
+  // Lazy initializer: na serwerze `readRecent()` zwraca [] (guard), na
+  // kliencie czyta localStorage raz przy mount. DOM się nie różni (modal
+  // zamknięty = brak treści), więc brak hydration mismatch. Po commit/clear
+  // stan aktualizują handlery — bez efektu z synchronicznym setState
+  // (reguła `react-hooks/set-state-in-effect`).
+  const [recent, setRecent] = useState<string[]>(() => readRecent());
 
   const commitRecent = useCallback((q: string) => {
     setRecent(pushRecent(q));
@@ -77,49 +78,13 @@ export function SearchModal({ open, onOpenChange }: SearchModalProps) {
     setRecent([]);
   }, []);
 
+  // Reset po zamknięciu — z opóźnieniem, żeby treść nie mignęła w trakcie
+  // animacji zamykania. Timer MUSI być sprzątany: ponowne otwarcie w <200ms
+  // kasowało query, które użytkownik właśnie zaczął wpisywać.
   useEffect(() => {
-    if (!query.trim()) {
-      setResults([]);
-      setLoading(false);
-      return;
-    }
-
-    const abortController = new AbortController();
-    setLoading(true);
-
-    const timer = setTimeout(async () => {
-      try {
-        const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`, {
-          signal: abortController.signal,
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setResults(data);
-        }
-      } catch (err) {
-        if ((err as Error).name !== "AbortError") {
-          console.error("Search failed:", err);
-        }
-      } finally {
-        setLoading(false);
-      }
-    }, 400); // 400ms debounce
-
-    return () => {
-      clearTimeout(timer);
-      abortController.abort();
-    };
-  }, [query]);
-
-  // Reset state when closed
-  useEffect(() => {
-    if (!open) {
-      setTimeout(() => {
-        setQuery("");
-        setResults([]);
-        setLoading(false);
-      }, 200);
-    }
+    if (open) return;
+    const timer = setTimeout(() => setQuery(""), 200);
+    return () => clearTimeout(timer);
   }, [open]);
 
   return (
@@ -220,6 +185,12 @@ export function SearchModal({ open, onOpenChange }: SearchModalProps) {
                   <ArrowRight className="size-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-all -translate-x-2 group-hover:translate-x-0 mt-1" />
                 </Link>
               ))}
+            </div>
+          ) : error ? (
+            <div className="px-6 py-10 text-center">
+              <p className="text-sm text-muted-foreground">
+                Wyszukiwanie chwilowo niedostępne. Spróbuj za moment.
+              </p>
             </div>
           ) : !loading && query.trim() !== "" ? (
             <div className="px-6 py-10 text-center">

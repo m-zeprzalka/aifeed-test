@@ -47,48 +47,9 @@ export interface ScrapedItem {
   is_processed: boolean;
 }
 
-// Joined types for frontend
-export interface ArticleWithCategory extends Article {
-  category: Category | null;
-}
-
-export interface ArticleWithCategoryAndTags extends ArticleWithCategory {
-  tags: Tag[];
-}
-
-export interface ArticleFull extends Article {
-  category: Category | null;
-  article_tags: { tag: Tag }[];
-}
-
-export type Database = {
-  public: {
-    Tables: {
-      categories: {
-        Row: Category;
-        Insert: Omit<Category, "id" | "created_at">;
-        Update: Partial<Omit<Category, "id">>;
-      };
-      articles: {
-        Row: Article;
-        Insert: Omit<Article, "id" | "created_at" | "updated_at">;
-        Update: Partial<Omit<Article, "id">>;
-      };
-      tags: {
-        Row: Tag;
-        Insert: Omit<Tag, "id">;
-        Update: Partial<Omit<Tag, "id">>;
-      };
-      article_tags: {
-        Row: ArticleTag;
-        Insert: ArticleTag;
-        Update: Partial<ArticleTag>;
-      };
-      scraped_items: {
-        Row: ScrapedItem;
-        Insert: Omit<ScrapedItem, "id" | "scraped_at">;
-        Update: Partial<Omit<ScrapedItem, "id">>;
-      };
-    };
-  };
-};
+// Joined type dla frontendu żyje w `src/lib/data.ts` (ArticleWithRelations).
+// Dawne warianty (ArticleWithCategory / ArticleFull) i generyczny typ
+// `Database` były martwym kodem — klienty Supabase w tym projekcie są
+// nietypowane; jeśli kiedyś przejdziemy na `createClient<Database>()`,
+// wygeneruj typy przez `supabase gen types typescript` zamiast utrzymywać
+// je ręcznie.

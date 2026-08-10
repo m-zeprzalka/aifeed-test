@@ -1,21 +1,17 @@
 import {
   getSitemapArticles,
   getCategories,
-  getAllTags,
   getCategoriesLastModified,
-  getTagsLastModified,
 } from "@/lib/data";
 import { siteConfig } from "@/config/site";
 import type { MetadataRoute } from "next";
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const baseUrl = siteConfig.url;
-  const [articles, categories, tags, categoryMods, tagMods] = await Promise.all([
+  const [articles, categories, categoryMods] = await Promise.all([
     getSitemapArticles(5000),
     getCategories(),
-    getAllTags(),
     getCategoriesLastModified(),
-    getTagsLastModified(),
   ]);
 
   const articleUrls = articles.map((article) => ({
@@ -35,12 +31,9 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     priority: 0.8,
   }));
 
-  const tagUrls = tags.map((tag) => ({
-    url: `${baseUrl}/tag/${tag.slug}`,
-    lastModified: tagMods[tag.slug] ?? new Date(),
-    changeFrequency: "weekly" as const,
-    priority: 0.5,
-  }));
+  // Strony tagów celowo NIE są w sitemapie — są `noindex, follow` (thin
+  // content, zob. komentarz przy `tagMetadata` w `lib/seo.ts`). Zgłaszanie
+  // noindexowanych URL-i w sitemapie to sprzeczny sygnał dla Google.
 
   // Home `lastModified` derived from the newest article so a crawl reflects
   // actual content change, not the time the sitemap was generated.
@@ -68,7 +61,6 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     // /szukaj intentionally omitted — it's noindex'd (thin content) and has
     // no standalone value as a discoverable URL.
     ...categoryUrls,
-    ...tagUrls,
     ...articleUrls,
   ];
 }

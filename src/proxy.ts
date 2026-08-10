@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { checkAdminAuth } from "@/lib/admin-auth";
 
 /**
  * Content-Security-Policy. Wynesiona do stałej, bo szczegółowa i wymaga
@@ -21,13 +22,21 @@ import { NextRequest, NextResponse } from "next/server";
  * - `frame-ancestors 'none'`: duplikat X-Frame-Options DENY (CSP wygrywa w
  *   nowych przeglądarkach, XFO zostaje dla starych).
  */
+// `'unsafe-eval'` WYŁĄCZNIE w dev: React/Next w trybie deweloperskim używa
+// eval() do narzędzi debugowych (odtwarzanie callstacków); bez tego konsola
+// sypie błędem "eval() is not supported". Produkcyjny React nigdy nie używa
+// eval — na produkcji dyrektywa pozostaje bez niego.
+const DEV_EVAL = process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : "";
+
 const CSP = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' https://www.googletagmanager.com https://va.vercel-scripts.com",
+  `script-src 'self' 'unsafe-inline'${DEV_EVAL} https://www.googletagmanager.com https://va.vercel-scripts.com`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
   "font-src 'self' data:",
-  "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.google-analytics.com https://www.google-analytics.com https://va.vercel-scripts.com https://vitals.vercel-insights.com",
+  // `stats.g.doubleclick.net` — GA4 wysyła tam beacony przy włączonych ads
+  // signals; bez wpisu byłyby po cichu ubijane przez CSP.
+  "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.google-analytics.com https://www.google-analytics.com https://stats.g.doubleclick.net https://va.vercel-scripts.com https://vitals.vercel-insights.com",
   "frame-ancestors 'none'",
   "base-uri 'self'",
   "form-action 'self'",
@@ -36,34 +45,23 @@ const CSP = [
 ].join("; ");
 
 /**
- * HTTP Basic Auth dla `/admin/*`. Hasło + login w env (`ADMIN_USERNAME`,
- * `ADMIN_PASSWORD`). Bez env — dashboard zwraca 503 (lepiej niż otwarty
- * dostęp). Vercel Hobby nie ma "Password Protection" (płatne), więc
- * robimy własną warstwę edge-side.
+ * HTTP Basic Auth dla `/admin/*`. Weryfikacja siedzi w `lib/admin-auth.ts`
+ * (stałoczasowe porównanie, odporność na uszkodzony base64) i jest
+ * współdzielona z Server Actions admina — proxy to tylko PIERWSZA warstwa
+ * (browser challenge), nie jedyna. Bez env — 503 (fail-closed). Vercel Hobby
+ * nie ma "Password Protection" (płatne), więc robimy własną warstwę.
  */
-function basicAuthCheck(request: NextRequest): NextResponse | null {
-  const expectedUser = process.env.ADMIN_USERNAME;
-  const expectedPass = process.env.ADMIN_PASSWORD;
+async function basicAuthCheck(request: NextRequest): Promise<NextResponse | null> {
+  const result = await checkAdminAuth(request.headers.get("authorization"));
 
-  if (!expectedUser || !expectedPass) {
+  if (result === "unconfigured") {
     return new NextResponse("Admin dashboard unavailable: missing ADMIN_USERNAME/ADMIN_PASSWORD env.", {
       status: 503,
       headers: { "Cache-Control": "no-store" },
     });
   }
 
-  const auth = request.headers.get("authorization");
-  if (auth?.startsWith("Basic ")) {
-    // Atob jest dostępne w runtime Vercel (Edge + Node). Decodujemy
-    // header `Basic base64(user:pass)`.
-    const decoded = atob(auth.slice("Basic ".length));
-    const sepIdx = decoded.indexOf(":");
-    const user = sepIdx >= 0 ? decoded.slice(0, sepIdx) : "";
-    const pass = sepIdx >= 0 ? decoded.slice(sepIdx + 1) : "";
-    if (user === expectedUser && pass === expectedPass) {
-      return null;
-    }
-  }
+  if (result === "ok") return null;
 
   return new NextResponse("Authentication required", {
     status: 401,
@@ -74,11 +72,11 @@ function basicAuthCheck(request: NextRequest): NextResponse | null {
   });
 }
 
-export function proxy(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   // Bramka admin — uruchamiana zanim trafimy na response z security headers
   // (te są mniej istotne dla 401). Jeśli auth fails, zwracamy własny response.
   if (request.nextUrl.pathname.startsWith("/admin")) {
-    const failure = basicAuthCheck(request);
+    const failure = await basicAuthCheck(request);
     if (failure) return failure;
   }
 

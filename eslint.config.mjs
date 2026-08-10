@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Generated coverage output — bez tego wpisu `npm run lint` po
+    // uruchomieniu coverage lintuje wygenerowane lcov-report/*.js.
+    "coverage/**",
   ]),
 ]);
 

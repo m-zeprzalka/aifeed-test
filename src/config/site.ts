@@ -2,7 +2,11 @@ export const siteConfig = {
   name: "AiFeed",
   description:
     "Twoje codzienne źródło wiadomości o sztucznej inteligencji, badaniach naukowych i nowościach z branży technologicznej.",
-  url: process.env.NEXT_PUBLIC_SITE_URL || "https://aifeed.pl",
+  // Fallback MUSI być wariantem `www` (to on serwuje ruch produkcyjny —
+  // apex 301-uje na www). Zły fallback = canonicale wskazujące na redirect
+  // w każdym środowisku bez ustawionej zmiennej. Trailing slash zdejmowany,
+  // bo wszystkie URL-e budujemy przez konkatenację `${url}/sciezka`.
+  url: (process.env.NEXT_PUBLIC_SITE_URL || "https://www.aifeed.pl").replace(/\/+$/, ""),
   // Empty until real social profiles exist. Once founded, fill in and they
   // automatically populate JSON-LD `Organization.sameAs` and the `via=`
   // parameter on Twitter/X share intents.

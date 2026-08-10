@@ -3,11 +3,6 @@ export function escapeIlike(input: string): string {
   return input.replace(/[%_\\]/g, (ch) => `\\${ch}`);
 }
 
-/** Sanitize a query for use inside PostgREST .or() — strip chars with syntactic meaning. */
-export function sanitizeOrQuery(input: string): string {
-  return escapeIlike(input).replace(/[,()]/g, " ");
-}
-
 /**
  * Sanitize a query for Postgres `to_tsquery` / `.textSearch()`. tsquery
  * meta-characters: `& | ! ( ) : *`. Zostawiamy wyłącznie alfanumeryczne
@@ -24,11 +19,21 @@ export function sanitizeTsQuery(input: string): string {
     .trim();
 }
 
-/** Polish plural form for a "wyniki" count (search results). */
-export function pluralize(count: number): string {
-  if (count === 1) return "wynik";
-  if (count >= 2 && count <= 4) return "wyniki";
-  return "wyników";
+/**
+ * Polish plural form for a count. Defaults to "wynik" forms (search results);
+ * pass custom `[one, few, many]` forms for other nouns. Implements the full
+ * Polish rule: the paucal form applies to unit digits 2-4 EXCEPT teens
+ * (12-14), so 22 → "wyniki" but 12 → "wyników".
+ */
+export function pluralize(
+  count: number,
+  forms: readonly [one: string, few: string, many: string] = ["wynik", "wyniki", "wyników"]
+): string {
+  if (count === 1) return forms[0];
+  const units = count % 10;
+  const tens = Math.floor(count / 10) % 10;
+  if (units >= 2 && units <= 4 && tens !== 1) return forms[1];
+  return forms[2];
 }
 
 export const SEARCH_QUERY_MAX_LENGTH = 100;

@@ -3,27 +3,17 @@ import { Hash } from "lucide-react";
 import { ArticleCard } from "@/components/articles/article-card";
 import { Breadcrumbs } from "@/components/articles/breadcrumbs";
 import { EmptyState } from "@/components/ui/empty-state";
-import { getTagBySlug, getArticlesByTag, getPopularTags } from "@/lib/data";
+import { getTagBySlug, getArticlesByTag } from "@/lib/data";
 import { siteConfig } from "@/config/site";
 import { jsonLdScript } from "@/lib/jsonld";
+import { pluralize } from "@/lib/search-utils";
 import { tagMetadata, notFoundMetadata, buildItemListJsonLd } from "@/lib/seo";
 import type { Metadata } from "next";
 
+// Strony tagów są `noindex, follow` (zob. `tagMetadata` w `lib/seo.ts`) —
+// nie prerenderujemy ich w build time; on-demand ISR w zupełności wystarcza
+// dla ruchu użytkowników z linków tagowych pod artykułami.
 export const revalidate = 300;
-
-/**
- * Pre-render top 100 najpopularniejszych tagów (≥ 1 użycie, posortowane
- * przez `popular_tags` RPC). Reszta tagów (rzadkie, długi ogon) lecą
- * przez on-demand ISR — i tak są thin content, więc niska priorytetowość.
- *
- * Uwaga: tag pages obecnie indexujemy normalnie; gdy zdecydujemy się na
- * `noindex` (AUDIT.md P1-6, ścieżka A), `generateStaticParams` można
- * zmniejszyć lub usunąć — Google i tak ich nie odwiedzi.
- */
-export async function generateStaticParams() {
-  const tags = await getPopularTags(100);
-  return tags.map((t) => ({ slug: t.slug }));
-}
 
 interface PageProps {
   params: Promise<{ slug: string }>;
@@ -80,7 +70,7 @@ export default async function TagPage({ params }: PageProps) {
           <span className="text-primary">#</span>{tag.name}
         </h1>
         <p className="mt-2 text-base text-muted-foreground">
-          {articles.length} {articles.length === 1 ? "artykuł" : articles.length < 5 ? "artykuły" : "artykułów"} z tym tagiem
+          {articles.length} {pluralize(articles.length, ["artykuł", "artykuły", "artykułów"])} z tym tagiem
         </p>
       </div>
 

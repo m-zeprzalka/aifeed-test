@@ -1,5 +1,6 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logPipelineEvent } from "@/lib/telemetry";
+import { safeFetch, readTextCapped, validateExternalUrl } from "@/lib/scraper/safe-fetch";
 
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 const IMAGE_MODEL = "google/gemini-2.5-flash-image";
@@ -44,21 +45,31 @@ export async function getArticleThumbnail(
 
 // --------------- OG:IMAGE SCRAPER ---------------
 
+// Strony z og:image potrafią być ciężkie; meta tagi są w <head>, więc 1 MB
+// w zupełności wystarcza do ich znalezienia.
+const MAX_OG_HTML_BYTES = 1024 * 1024;
+
+/**
+ * Obie warstwy fetch (strona źródłowa + HEAD na og:image) idą przez
+ * `safeFetch` — og:image to atakowalny wektor SSRF: strona osiągalna przez
+ * feed może wskazać `content="http://169.254.169.254/..."` i bez walidacji
+ * serwer wykonałby żądanie do hosta wewnętrznego, a URL wylądowałby w DB
+ * jako thumbnail.
+ */
 async function scrapeOgImage(
   sourceUrl: string
 ): Promise<{ imageUrl: string; siteName: string } | null> {
   try {
-    const res = await fetch(sourceUrl, {
+    const res = await safeFetch(sourceUrl, {
       headers: {
         "User-Agent":
           "Mozilla/5.0 (compatible; AiFeedBot/1.0; +https://aifeed.pl)",
       },
-      signal: AbortSignal.timeout(10_000),
-      redirect: "follow",
+      timeoutMs: 10_000,
     });
-    if (!res.ok) return null;
+    if (!res || !res.ok) return null;
 
-    const html = await res.text();
+    const html = await readTextCapped(res, MAX_OG_HTML_BYTES);
 
     // Extract og:image — handle both attribute orders
     const ogImage =
@@ -71,27 +82,16 @@ async function scrapeOgImage(
 
     if (!ogImage) return null;
 
-    // Resolve relative URLs
-    let imageUrl = ogImage;
-    if (imageUrl.startsWith("/")) {
-      const base = new URL(sourceUrl);
-      imageUrl = `${base.protocol}//${base.host}${imageUrl}`;
-    }
-
-    // Validate URL format
-    try {
-      new URL(imageUrl);
-    } catch {
-      return null;
-    }
+    // Resolve relative URLs + pełna walidacja SSRF (og:image jest treścią
+    // atakowalną — kontroluje ją autor strony źródłowej, nie my).
+    const imageUrlParsed = validateExternalUrl(ogImage, new URL(sourceUrl));
+    if (!imageUrlParsed) return null;
+    const imageUrl = imageUrlParsed.href;
 
     // Validate image is accessible and not a tracking pixel
     try {
-      const head = await fetch(imageUrl, {
-        method: "HEAD",
-        signal: AbortSignal.timeout(5_000),
-        redirect: "follow",
-      });
+      const head = await safeFetch(imageUrl, { method: "HEAD", timeoutMs: 5_000 });
+      if (!head) return null; // odrzucone przez guard (np. redirect do środka)
       if (!head.ok) return null;
 
       const contentType = head.headers.get("content-type") || "";
@@ -173,6 +173,8 @@ Requirements:
         model: IMAGE_MODEL,
         messages: [{ role: "user", content: prompt }],
         modalities: ["image", "text"],
+        // Jawnie proś o dane kosztowe — zob. komentarz w writer.ts.
+        usage: { include: true },
       }),
       signal: AbortSignal.timeout(90_000),
     });
@@ -239,6 +241,10 @@ function parseDataUrl(
 
 // --------------- SUPABASE STORAGE ---------------
 
+// Bucket tworzony raz na instancję funkcji — nie ma sensu płacić round-tripem
+// do Storage przy każdym uploadzie za idempotentny createBucket.
+let bucketEnsured = false;
+
 async function uploadToStorage(
   imageBuffer: Buffer,
   format: string
@@ -246,13 +252,16 @@ async function uploadToStorage(
   try {
     const supabase = createAdminClient();
 
-    // Ensure bucket exists (idempotent — ignores "already exists")
-    await supabase.storage
-      .createBucket("thumbnails", {
-        public: true,
-        fileSizeLimit: 10 * 1024 * 1024, // 10 MB
-      })
-      .catch(() => {});
+    if (!bucketEnsured) {
+      // Ensure bucket exists (idempotent — ignores "already exists")
+      await supabase.storage
+        .createBucket("thumbnails", {
+          public: true,
+          fileSizeLimit: 10 * 1024 * 1024, // 10 MB
+        })
+        .catch(() => {});
+      bucketEnsured = true;
+    }
 
     const ext = format === "jpeg" ? "jpg" : format;
     const fileName = `ai-${Date.now()}.${ext}`;

@@ -15,10 +15,13 @@ export const revalidate = 300;
 const PAGE_SIZE = 12;
 
 /**
- * Wszystkie 6 kategorii pochodzi ze stałego `siteConfig` — nie ma sensu
- * trzymać ich jako on-demand ISR. Pre-render w build time = każdy bot
- * Google dostaje gotowy HTML. Paginacja (`?page=N`) wciąż jest dynamiczna
- * — to OK, bo crawler i tak preferuje canonical (`/kategoria/slug`).
+ * Uwaga nt. renderowania: strona czyta `searchParams` (paginacja `?page=N`),
+ * a to Dynamic API — route renderuje się per-request mimo `revalidate`.
+ * Koszt jest kontrolowany: `getCategoryBySlug` jest deduplikowane przez
+ * React cache() (1 query zamiast 3), a paginacja poza zakresem kończy się
+ * natychmiastowym notFound(). Przejście na ścieżkową paginację
+ * (`/kategoria/[slug]/strona/[nr]`) przywróciłoby pełne ISR — punkt w
+ * ROADMAP.md, wymaga 301 dla starych URL-i `?page=`.
  */
 export function generateStaticParams() {
   return siteConfig.categories.map((c) => ({ slug: c.slug }));
@@ -51,6 +54,12 @@ export default async function CategoryPage({ params, searchParams }: PageProps) 
 
   const { articles, page, totalPages, total, hasPrev, hasNext } = paginated;
 
+  // Puste strony paginacji (?page=9999) muszą być twardym 404. Bez tego każda
+  // liczba całkowita to osobny, indeksowalny, pusty URL z self-canonical —
+  // nieskończona przestrzeń thin content (soft-404), dokładnie sygnał
+  // "scaled content abuse", którego unikamy.
+  if (articles.length === 0 && page > 1) notFound();
+
   // Spójne `CollectionPage > ItemList` (taki sam wzorzec jak na stronie tagu).
   // `numberOfItems` ustawiamy na pełną liczbę artykułów w kategorii (nie tylko
   // w bieżącej stronie paginacji) — Google używa tego do sygnalizacji że
@@ -59,9 +68,13 @@ export default async function CategoryPage({ params, searchParams }: PageProps) 
     ? buildItemListJsonLd({
         name: category.name,
         description: category.description || `Artykuły z kategorii ${category.name}`,
-        url: `${siteConfig.url}/kategoria/${category.slug}`,
+        url:
+          page > 1
+            ? `${siteConfig.url}/kategoria/${category.slug}?page=${page}`
+            : `${siteConfig.url}/kategoria/${category.slug}`,
         totalItems: total,
         items: articles.map((a) => ({ slug: a.slug, title: a.title })),
+        startPosition: (page - 1) * PAGE_SIZE,
       })
     : null;
 

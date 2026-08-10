@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { escapeIlike, sanitizeOrQuery, pluralize } from "@/lib/search-utils";
+import { escapeIlike, sanitizeTsQuery, pluralize } from "@/lib/search-utils";
 
 describe("escapeIlike", () => {
   it("escapes % character", () => {
@@ -31,18 +31,22 @@ describe("escapeIlike", () => {
   });
 });
 
-describe("sanitizeOrQuery", () => {
-  it("strips PostgREST or-syntax punctuation", () => {
-    expect(sanitizeOrQuery("foo,bar")).toBe("foo bar");
-    expect(sanitizeOrQuery("foo(bar)")).toBe("foo bar ");
+describe("sanitizeTsQuery", () => {
+  it("strips tsquery metacharacters", () => {
+    expect(sanitizeTsQuery("gpt & claude | !bard")).toBe("gpt claude bard");
+    expect(sanitizeTsQuery("foo:*(bar)")).toBe("foo bar");
   });
 
-  it("still escapes ilike metacharacters", () => {
-    expect(sanitizeOrQuery("50%_off")).toBe("50\\%\\_off");
+  it("keeps Polish diacritics and digits", () => {
+    expect(sanitizeTsQuery("Żółć GPT-5")).toBe("żółć gpt 5");
   });
 
-  it("escapes metacharacters even when paired with punctuation", () => {
-    expect(sanitizeOrQuery("foo%,bar_")).toBe("foo\\% bar\\_");
+  it("collapses whitespace and trims", () => {
+    expect(sanitizeTsQuery("  open   ai  ")).toBe("open ai");
+  });
+
+  it("returns empty string for punctuation-only input", () => {
+    expect(sanitizeTsQuery("&|!()")).toBe("");
   });
 });
 
@@ -62,5 +66,21 @@ describe("pluralize (search results)", () => {
     expect(pluralize(5)).toBe("wyników");
     expect(pluralize(10)).toBe("wyników");
     expect(pluralize(100)).toBe("wyników");
+  });
+
+  it("uses paucal form for unit digits 2-4 above 20, but not for teens", () => {
+    expect(pluralize(22)).toBe("wyniki");
+    expect(pluralize(34)).toBe("wyniki");
+    expect(pluralize(12)).toBe("wyników");
+    expect(pluralize(14)).toBe("wyników");
+    expect(pluralize(25)).toBe("wyników");
+  });
+
+  it("accepts custom noun forms", () => {
+    const forms = ["artykuł", "artykuły", "artykułów"] as const;
+    expect(pluralize(1, forms)).toBe("artykuł");
+    expect(pluralize(3, forms)).toBe("artykuły");
+    expect(pluralize(12, forms)).toBe("artykułów");
+    expect(pluralize(23, forms)).toBe("artykuły");
   });
 });

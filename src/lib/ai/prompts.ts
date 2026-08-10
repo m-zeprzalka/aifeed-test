@@ -45,7 +45,11 @@ export const ARTICLE_USER_PROMPT = (
   topic: string,
   sourceUrls: string[],
   sourceDescriptions: string[],
-  sourceContent: string = ""
+  sourceContent: string = "",
+  // Katalog istniejących tagów — AI wybiera z listy zamiast tworzyć
+  // warianty pisowni ("GPT-5" vs "GPT 5" vs "gpt-5"). Bez tej dyscypliny
+  // katalog urósł do ~2 tagów-sierot na artykuł (thin content dla Google).
+  existingTags: string[] = []
 ) => {
   const hasContent = sourceContent.trim().length > 100;
 
@@ -102,5 +106,10 @@ EXCERPT — ZASADY SEO:
 - Informuje o wartości artykułu, nie jest ogólnikowy
 - KAŻDY excerpt MUSI być unikalny i specyficzny dla tego artykułu
 
-TAGI: 3-5 tagów po polsku (chyba że to nazwa własna jak "OpenAI", "GPT-5")`;
+TAGI — DYSCYPLINA KATALOGU:
+- 3-5 tagów po polsku (nazwy własne w oryginale: "OpenAI", "GPT-5").${existingTags.length > 0 ? `
+- Wybieraj PRZEDE WSZYSTKIM z listy istniejących tagów poniżej — używaj DOKŁADNIE tej pisowni.
+- Maksymalnie JEDEN tag spoza listy, wyłącznie gdy żaden istniejący nie opisuje tematu.
+
+ISTNIEJĄCE TAGI: ${existingTags.join(", ")}` : ""}`;
 };

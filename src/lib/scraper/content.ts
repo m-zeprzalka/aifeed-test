@@ -1,54 +1,36 @@
-/**
- * Reject fetches targeting localhost or RFC1918/loopback ranges (SSRF hardening).
- * RSS feeds shouldn't resolve to internal hosts; if they do, abort before fetch.
- */
-function isInternalHost(hostname: string): boolean {
-  const h = hostname.toLowerCase();
-  if (h === "localhost" || h.endsWith(".localhost")) return true;
-  if (h === "0.0.0.0") return true;
-  if (/^127\./.test(h)) return true;
-  if (/^10\./.test(h)) return true;
-  if (/^192\.168\./.test(h)) return true;
-  if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return true;
-  if (/^169\.254\./.test(h)) return true; // link-local / AWS metadata
-  if (h === "::1" || h.startsWith("[::1]") || h.startsWith("fc") || h.startsWith("fd")) return true;
-  return false;
-}
+import { safeFetch, readTextCapped } from "@/lib/scraper/safe-fetch";
+
+// Twardy limit czytanego HTML. Interesuje nas pierwsze ~6000 znaków tekstu
+// po ekstrakcji, więc 3 MB surowego HTML to bezpieczny zapas; bez capa wrogi
+// serwer mógłby wysłać setki MB w limicie czasu (memory DoS).
+const MAX_HTML_BYTES = 3 * 1024 * 1024;
 
 /**
  * Scrapes the full text content of a source article from its URL.
  * Used to provide the AI writer with actual source material
  * instead of just an RSS title/snippet — preventing hallucinations.
+ *
+ * SSRF hardening (protokół, blokada hostów wewnętrznych i literałów IP,
+ * walidacja KAŻDEGO hopu przekierowania) siedzi w `safeFetch` —
+ * `src/lib/scraper/safe-fetch.ts`. NIE luzować; zmiany wymagają testów
+ * w `safe-fetch.test.ts`.
  */
 export async function scrapeArticleContent(url: string): Promise<string> {
   try {
-    let parsed: URL;
-    try {
-      parsed = new URL(url);
-    } catch {
-      console.warn(`[Content Scraper] Invalid URL: ${url}`);
-      return "";
-    }
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      console.warn(`[Content Scraper] Rejecting non-HTTP protocol: ${parsed.protocol}`);
-      return "";
-    }
-    if (isInternalHost(parsed.hostname)) {
-      console.warn(`[Content Scraper] Rejecting internal host: ${parsed.hostname}`);
-      return "";
-    }
-
-    const res = await fetch(url, {
+    const res = await safeFetch(url, {
       headers: {
         "User-Agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         Accept: "text/html,application/xhtml+xml",
         "Accept-Language": "en-US,en;q=0.9",
       },
-      signal: AbortSignal.timeout(15_000),
-      redirect: "follow",
+      timeoutMs: 15_000,
     });
 
+    if (!res) {
+      console.warn(`[Content Scraper] URL rejected by SSRF guard or redirect chain: ${url}`);
+      return "";
+    }
     if (!res.ok) {
       console.warn(`[Content Scraper] HTTP ${res.status} for ${url}`);
       return "";
@@ -61,7 +43,7 @@ export async function scrapeArticleContent(url: string): Promise<string> {
       return "";
     }
 
-    let html = await res.text();
+    let html = await readTextCapped(res, MAX_HTML_BYTES);
 
     // Detect binary/PDF content that slipped through
     if (html.startsWith("%PDF") || html.includes("endobj") || html.includes("endstream")) {

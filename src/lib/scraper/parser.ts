@@ -65,13 +65,22 @@ export async function scrapeAllFeeds(): Promise<ScrapedArticle[]> {
           if (!AI_KEYWORD_REGEX.test(text)) continue;
         }
 
+        // Walidacja daty z feedu. Nieparsowalny `pubDate` dawał Invalid Date
+        // → NaN w scoringu (item nigdy nie wybierany); data z przyszłości
+        // (złe zegary wydawcy) dawała freshness > 100 i dominowała selekcję.
+        // W obu przypadkach przycinamy do "teraz".
+        let publishedAt = item.pubDate ? new Date(item.pubDate) : new Date();
+        if (Number.isNaN(publishedAt.getTime()) || publishedAt.getTime() > Date.now()) {
+          publishedAt = new Date();
+        }
+
         results.push({
           title: item.title,
           description: item.contentSnippet || item.content || "",
           url: item.link,
           sourceName: source.name,
           category: source.category,
-          publishedAt: item.pubDate ? new Date(item.pubDate) : new Date(),
+          publishedAt,
         });
       }
     } catch (error) {

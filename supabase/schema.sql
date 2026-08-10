@@ -94,8 +94,9 @@ CREATE TABLE IF NOT EXISTS pipeline_events (
 -- INDEKSY
 -- =============================================================================
 
--- Hot path: lookup artykułu po slug (każda strona artykułu).
-CREATE INDEX IF NOT EXISTS idx_articles_slug ON articles(slug);
+-- Lookup po slug pokrywa niejawny unikalny indeks z constraintu
+-- `articles.slug UNIQUE` — osobny indeks byłby czystą duplikacją
+-- (migracja 005 usuwa go ze starych instalacji).
 
 -- Hot path: lista najnowszych opublikowanych (home, category, feeds).
 CREATE INDEX IF NOT EXISTS idx_articles_published
@@ -144,13 +145,21 @@ CREATE INDEX IF NOT EXISTS idx_pipeline_events_event
 -- TRIGGER: updated_at
 -- =============================================================================
 
--- Utrzymuje kolumnę articles.updated_at aktualną przy każdym UPDATE.
--- Używane przez sitemap.ts (lastModified) i JSON-LD (dateModified).
--- Bez triggera updated_at zawsze = created_at.
+-- Utrzymuje kolumnę articles.updated_at przy UPDATE — ale TYLKO gdy
+-- zmieniła się treść (title/content/excerpt/thumbnail). Używane przez
+-- sitemap.ts (lastModified) i JSON-LD (dateModified). Zmiana flag
+-- (is_featured, is_published) NIE podbija daty — Google dewaluuje
+-- date-bumping bez realnej zmiany treści (migracja 005).
 CREATE OR REPLACE FUNCTION set_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
-  NEW.updated_at = now();
+  IF NEW.title IS DISTINCT FROM OLD.title
+     OR NEW.content IS DISTINCT FROM OLD.content
+     OR NEW.excerpt IS DISTINCT FROM OLD.excerpt
+     OR NEW.thumbnail_url IS DISTINCT FROM OLD.thumbnail_url
+  THEN
+    NEW.updated_at = now();
+  END IF;
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;

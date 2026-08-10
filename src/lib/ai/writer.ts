@@ -150,37 +150,63 @@ export async function generateArticle(
   // `pipeline_events` (event: `ai_cost`, type: `article`). Wywoływane z
   // cron route. Brak runId = standalone use (test/skrypt) — pomijamy log.
   runId?: string,
+  // Katalog istniejących tagów przekazywany do promptu (dyscyplina
+  // słownika — zob. komentarz w prompts.ts).
+  existingTags: string[] = [],
 ): Promise<GeneratedArticle> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
     throw new Error("OPENROUTER_API_KEY is not set");
   }
 
-  const response = await fetch(OPENROUTER_API_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000",
-      "X-Title": "AiFeed",
-    },
-    body: JSON.stringify({
-      model: ARTICLE_MODEL,
-      max_tokens: 4096,
-      messages: [
-        {
-          role: "system",
-          content: ARTICLE_SYSTEM_PROMPT,
-        },
-        {
-          role: "user",
-          content: ARTICLE_USER_PROMPT(topic, sourceUrls, sourceDescriptions, sourceContent),
-        },
-      ],
-    }),
-    signal: AbortSignal.timeout(90_000), // 90s timeout per article
+  const requestBody = JSON.stringify({
+    model: ARTICLE_MODEL,
+    max_tokens: 4096,
+    // Bez tego OpenRouter często nie zwraca `usage.total_cost` i telemetria
+    // kosztów w /admin loguje undefined.
+    usage: { include: true },
+    messages: [
+      {
+        role: "system",
+        content: ARTICLE_SYSTEM_PROMPT,
+      },
+      {
+        role: "user",
+        content: ARTICLE_USER_PROMPT(topic, sourceUrls, sourceDescriptions, sourceContent, existingTags),
+      },
+    ],
   });
 
+  // Jedna próba ponowienia przy błędach przejściowych (429/5xx/timeout).
+  // Chwilowa czkawka providera nie powinna wyrzucać artykułu z całego runu —
+  // bez retry item wraca do kolejki dopiero przy następnym cronie (−6h).
+  let response: Response | null = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      response = await fetch(OPENROUTER_API_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000",
+          "X-Title": "AiFeed",
+        },
+        body: requestBody,
+        signal: AbortSignal.timeout(90_000), // 90s timeout per article
+      });
+      const transient = response.status === 429 || response.status >= 500;
+      if (!transient || attempt === 1) break;
+    } catch (e) {
+      if (attempt === 1) throw e;
+      response = null;
+    }
+    console.warn(`[Writer] OpenRouter transient failure (attempt ${attempt + 1}), retrying in 3s...`);
+    await new Promise((r) => setTimeout(r, 3_000));
+  }
+
+  if (!response) {
+    throw new Error("OpenRouter request failed after retry");
+  }
   if (!response.ok) {
     const errorBody = await response.text();
     throw new Error(`OpenRouter API error ${response.status}: ${errorBody}`);

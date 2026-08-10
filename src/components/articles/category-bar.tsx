@@ -21,11 +21,17 @@ export function CategoryBar({ categories }: CategoryBarProps) {
   const isHidden = pathname.startsWith("/artykul/");
   const scrollerRef = useRef<HTMLUListElement>(null);
 
-  // Restore scroll position on mount; persist on scroll. sessionStorage
-  // throws QuotaExceededError in Safari private mode and SecurityError when
+  // Restore scroll position; persist on scroll. sessionStorage throws
+  // QuotaExceededError in Safari private mode and SecurityError when
   // disabled by site settings — wrapped so a private-tab user never breaks
   // the bar entirely.
+  //
+  // Zależność od `isHidden` jest KONIECZNA: layout trzyma komponent
+  // zamontowany między nawigacjami, a na `/artykul/*` renderujemy null —
+  // efekt z `[]` odpaliłby się raz z `scrollerRef.current === null`
+  // (pierwsza strona = artykuł) i listener nigdy by się nie podpiął.
   useEffect(() => {
+    if (isHidden) return;
     const el = scrollerRef.current;
     if (!el) return;
 
@@ -57,7 +63,7 @@ export function CategoryBar({ categories }: CategoryBarProps) {
       el.removeEventListener("scroll", onScroll);
       if (frame) cancelAnimationFrame(frame);
     };
-  }, []);
+  }, [isHidden]);
 
   // Ensure the active pin is visible after navigation. Runs when the active
   // route changes; if the active pin lies outside the scroller's visible area

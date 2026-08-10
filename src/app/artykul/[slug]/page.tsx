@@ -19,6 +19,21 @@ import remarkGfm from "remark-gfm";
 
 const getCachedArticle = cache((slug: string) => getArticleBySlug(slug));
 
+/**
+ * Plain text z React children nagłówka. `String(children)` na tablicy z
+ * elementami (np. `**bold**` → <strong>) daje "[object Object]" i ID
+ * rozjeżdża się ze spisem treści — stąd rekurencyjna ekstrakcja.
+ */
+function reactNodeText(node: React.ReactNode): string {
+  if (node == null || typeof node === "boolean") return "";
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(reactNodeText).join("");
+  if (typeof node === "object" && "props" in node) {
+    return reactNodeText((node.props as { children?: React.ReactNode }).children);
+  }
+  return "";
+}
+
 export const revalidate = 60;
 
 /**
@@ -98,8 +113,12 @@ export default async function ArticlePage({ params }: PageProps) {
     headline: article.title.slice(0, 110), // Google caps headline at 110 chars
     description: article.excerpt,
     ...(article.thumbnail_url && { image: [article.thumbnail_url] }),
-    datePublished: article.published_at,
-    dateModified: article.updated_at || article.published_at,
+    // Warunkowo — `published_at` jest nullable; `"datePublished": null`
+    // to twardy błąd w Rich Results.
+    ...(article.published_at && { datePublished: article.published_at }),
+    ...((article.updated_at || article.published_at) && {
+      dateModified: article.updated_at || article.published_at,
+    }),
     author: {
       "@type": "Organization",
       name: siteConfig.name,
@@ -114,7 +133,8 @@ export default async function ArticlePage({ params }: PageProps) {
     mainEntityOfPage: { "@type": "WebPage", "@id": articleUrl },
     ...(article.tags.length > 0 && { keywords: article.tags.map((t) => t.name).join(", ") }),
     ...(wordCount && { wordCount }),
-    articleBody: article.excerpt,
+    // `articleBody` celowo pominięte — treść jest w HTML; wcześniejsze
+    // ustawianie go na excerpt było semantycznie błędne (mislabeled data).
     speakable: {
       "@type": "SpeakableSpecification",
       cssSelector: ["h1", ".article-excerpt"],
@@ -167,8 +187,9 @@ export default async function ArticlePage({ params }: PageProps) {
             {article.title}
           </h1>
 
-          {/* Excerpt */}
-          <p className="mb-5 text-base text-muted-foreground leading-relaxed max-w-2xl">
+          {/* Excerpt — klasa `article-excerpt` jest celem selektora
+              `speakable.cssSelector` w JSON-LD powyżej; nie usuwać. */}
+          <p className="article-excerpt mb-5 text-base text-muted-foreground leading-relaxed max-w-2xl">
             {article.excerpt}
           </p>
 
@@ -217,11 +238,11 @@ export default async function ArticlePage({ params }: PageProps) {
               remarkPlugins={[remarkGfm]}
               components={{
                 h2: ({ children, ...props }) => {
-                  const id = slugifyHeading(String(children));
+                  const id = slugifyHeading(reactNodeText(children));
                   return <h2 id={id} {...props}>{children}</h2>;
                 },
                 h3: ({ children, ...props }) => {
-                  const id = slugifyHeading(String(children));
+                  const id = slugifyHeading(reactNodeText(children));
                   return <h3 id={id} {...props}>{children}</h3>;
                 },
                 a: ({ href, children, ...props }) => (

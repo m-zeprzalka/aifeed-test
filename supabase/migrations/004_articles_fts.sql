@@ -10,10 +10,12 @@
 -- ("openi" znajdzie "openai") jako fallback gdy tsquery zwróci 0 wyników.
 --
 -- WAŻNE: `GENERATED ALWAYS AS ... STORED` znaczy, że PostgreSQL JEDNORAZOWO
--- przy aplikacji migracji przegrzeje każdy istniejący artykuł i wyliczy
--- search_vector. Dla <1000 artykułów <1s, NIE blokuje zapisów (Postgres
--- używa concurrent index build poniżej). Każdy nowy INSERT/UPDATE generuje
--- vector automatycznie — bez triggerów, bez kodu w aplikacji.
+-- przy aplikacji migracji przepisze tabelę i wyliczy search_vector dla
+-- każdego wiersza. UWAGA: `ADD COLUMN ... STORED` bierze ACCESS EXCLUSIVE
+-- lock (pełny rewrite tabeli), a `CREATE INDEX` bez CONCURRENTLY blokuje
+-- zapisy na czas budowy. Przy <10k artykułów to sekundy — bez znaczenia;
+-- przy dużej tabeli aplikuj poza oknem crona (05/11/17 UTC). Każdy nowy
+-- INSERT/UPDATE generuje vector automatycznie — bez triggerów, bez kodu.
 --
 -- Konfiguracja `simple` (nie `polish`) — Postgres standardowo nie ma stemera
 -- polskiego. `simple` znaczy "bez lematyzacji", czyli "modele" nie znajdzie

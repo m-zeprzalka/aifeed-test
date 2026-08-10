@@ -6,15 +6,16 @@ export default function robots(): MetadataRoute.Robots {
     rules: {
       userAgent: "*",
       allow: "/",
-      // Disallow API routes, admin area, search query pages, and Next.js'
-      // internal data prefetch endpoints. Search is noindex'd in page-level
-      // metadata too, but the Disallow keeps crawlers from even attempting
-      // arbitrary `?q=...` permutations. `/_next/data/` would otherwise leak
-      // JSON variants of pages into search results.
       // /admin/ jest chronione Basic Auth + noindex w metadata + X-Robots-Tag
-      // w proxy, ale wpis tutaj dorzuca trzecią warstwę (crawler nawet nie
+      // w proxy — wpis tutaj dorzuca trzecią warstwę (crawler nawet nie
       // próbuje hitować).
-      disallow: ["/api/", "/admin/", "/szukaj", "/_next/data/"],
+      //
+      // /szukaj celowo NIE jest disallow'owane: strona ma meta `noindex` i
+      // Google musi móc ją scrawlować, żeby ten noindex zobaczyć. Disallow +
+      // noindex to sprzeczne sygnały ("Indexed, though blocked by robots.txt").
+      // Dawny wpis `/_next/data/` usunięty — to artefakt Pages Routera,
+      // App Router serwuje payloady RSC na URL-u strony (`?_rsc=`).
+      disallow: ["/api/", "/admin/"],
     },
     sitemap: `${siteConfig.url}/sitemap.xml`,
   };

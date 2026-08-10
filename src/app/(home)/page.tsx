@@ -167,13 +167,14 @@ export default async function HomePage() {
                   ))}
                 </div>
               ) : (
-                /* Layout C: Featured wide card + grid below */
+                /* Layout C: Featured wide card + grid below. (Bez `priority` —
+                   catIndex===0 zawsze bierze Layout A, więc warunek był tu
+                   martwy; sekcje C są głęboko poniżej fold.) */
                 <div className="space-y-5">
                   <ArticleCard
                     article={lead}
                     variant="featured"
                     className="min-h-[240px] lg:min-h-[300px]"
-                    priority={catIndex === 0}
                   />
                   {side.length > 0 && (
                     <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
@@ -189,7 +190,8 @@ export default async function HomePage() {
         );
       })}
 
-      {/* JSON-LD */}
+      {/* JSON-LD. Bez `SearchAction` — Google wycofał sitelinks searchbox
+          (2024), a nasz /szukaj jest noindex; blok był martwym sygnałem. */}
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{
@@ -199,10 +201,11 @@ export default async function HomePage() {
             name: siteConfig.name,
             url: siteConfig.url,
             description: siteConfig.description,
-            potentialAction: {
-              "@type": "SearchAction",
-              target: `${siteConfig.url}/szukaj?q={search_term_string}`,
-              "query-input": "required name=search_term_string",
+            inLanguage: "pl-PL",
+            publisher: {
+              "@type": "Organization",
+              name: siteConfig.name,
+              url: siteConfig.url,
             },
           }),
         }}

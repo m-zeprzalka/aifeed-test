@@ -23,6 +23,7 @@ Aplikuj po kolei migracje których jeszcze nie było w Twojej DB:
 | `002_updated_at_trigger_and_fk_index.sql` | Trigger `articles.updated_at` + indeks `article_tags(tag_id)` |
 | `003_pipeline_events.sql` | Tabela `pipeline_events` (telemetria pipeline'u, czytana przez `/admin` dashboard) + 2 indeksy + RLS service-role-only |
 | `004_articles_fts.sql` | `articles.search_vector` (STORED tsvector, wagi title/A + excerpt/B) + GIN index + trigram index `gin_trgm_ops` na title (fallback dla literówek). Postgres jednorazowo przegrzeje istniejące wpisy podczas aplikacji. |
+| `005_content_gated_updated_at.sql` | Trigger `updated_at` podbija datę TYLKO przy zmianie treści (title/content/excerpt/thumbnail) — zmiany flag nie fałszują `lastmod`/`dateModified` dla Google. Usuwa też zdublowany indeks `idx_articles_slug`. |
 
 Dla każdej: SQL Editor → New query → wklej → Run.
 
@@ -60,4 +61,4 @@ SELECT * FROM popular_tags(10);
 - **Anon key + RLS** — frontend czyta wyłącznie `articles (WHERE is_published=true)`, `categories`, `tags`, `article_tags`. Reszta (scraped_items, newsletter_subscribers) niedostępna publicznie.
 - **Service role key** — używany tylko server-side w `/api/cron/*` (pipeline) i `/api/newsletter` (upsert subskrybenta). Omija RLS.
 - **`popular_tags(tag_limit)` RPC** — wywoływane z `src/lib/data.ts::getPopularTags()`. Brak RPC = fallback na in-memory aggregate (działa, ale wolniejsze, log `[data] getPopularTags RPC missing…`).
-- **`articles.updated_at`** — autotriggerowane przez `articles_set_updated_at` przy każdym UPDATE. Używane w `sitemap.ts::lastModified` i JSON-LD `dateModified`.
+- **`articles.updated_at`** — autotriggerowane przez `articles_set_updated_at`, ale wyłącznie przy zmianie treści (title/content/excerpt/thumbnail — migracja 005). Używane w `sitemap.ts::lastModified` i JSON-LD `dateModified`.

@@ -8,7 +8,10 @@ export default function manifest(): MetadataRoute.Manifest {
     start_url: "/",
     display: "standalone",
     background_color: "#fafafa",
-    theme_color: "#6366f1",
+    // Musi zgadzać się z --primary (oklch(0.50 0.24 270) ≈ #5b3df7) używanym
+    // w brand-icon.tsx i opengraph-image.tsx — inaczej pasek PWA odjeżdża
+    // kolorem od ikony.
+    theme_color: "#5b3df7",
     lang: "pl",
     icons: [
       // Static PNGs in /public/. Pre-rendered (not generated on demand) so

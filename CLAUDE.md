@@ -4,31 +4,27 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project context
 
-**AiFeed** is a Polish-language, fully automated AI news magazine. A Vercel Cron (3×/day) triggers a pipeline that scrapes 20 RSS feeds, scores and dedupes items, scrapes full source content, generates a Polish article via OpenRouter (Claude Sonnet 4), runs a quality gate, picks a thumbnail (og:image → Gemini 2.5 Flash Image fallback), and publishes to Supabase. No human in the loop.
+**AiFeed** is a Polish-language, fully automated AI news magazine. A Vercel Cron (3×/day, `?count=4`) triggers a pipeline that scrapes 20 RSS feeds, scores and dedupes items, scrapes full source content, generates a Polish article via OpenRouter (Claude Sonnet 4) constrained to the existing tag vocabulary, runs a quality gate, picks a thumbnail (og:image → Gemini 2.5 Flash Image fallback), and publishes to Supabase. No human in the loop.
 
 Production: `https://www.aifeed.pl` (Vercel project `aifeed-pl`).
 
-`AUDIT.md` (in the repo root) is the canonical audit and remediation plan — read it for the full picture of known issues, priorities, and architectural decisions. This file is a quick orientation, not a substitute.
+**`ROADMAP.md`** (repo root, Polish) is the canonical planning document — production rollout steps, SEO strategy (anti-"AI slop"), monetization phases, and the technical backlog with triggers. **`README.md`** (Polish) documents the current state. Read ROADMAP.md before proposing new work — many "obvious" improvements are deliberately deferred there with explicit triggers.
 
 ## Language and content conventions
 
-- **All user-facing copy, AI-generated articles, and commit messages are in Polish.** This is a hard requirement — the product is a Polish magazine. Code identifiers, comments-when-necessary, and CLAUDE.md / `.env.example` stay in English. `AUDIT.md` is in Polish because it's a project document, not source.
-- URL slugs are Polish (`/artykul/[slug]`, `/kategoria/[slug]`, `/szukaj`, `/o-serwisie`, `/polityka-prywatnosci`). English equivalents (`/article`, `/category`, `/search`, `/about`, `/privacy`) are 301-redirected in `next.config.ts`. When adding routes, keep them Polish and add a 301 if the English form was ever public.
+- **All user-facing copy, AI-generated articles, commit messages, and project documents (README/ROADMAP) are in Polish.** Code identifiers, code comments-when-necessary, `.env.example`, and this file stay in English.
+- URL slugs are Polish (`/artykul/[slug]`, `/kategoria/[slug]`, `/szukaj`, `/o-serwisie`, `/polityka-prywatnosci`). English equivalents are 308-redirected in `next.config.ts`. New routes: Polish, with a redirect if an English form was ever public.
 
 ## Commands
 
 ```bash
 npm run dev          # Next dev server (Turbopack)
 npm run build        # Production build (Turbopack)
-npm run start        # Serve production build
 npm run lint         # ESLint — must be 0/0
 npx tsc --noEmit     # Typecheck — must exit 0
 npm test             # vitest run (all tests)
-npm run test:watch   # vitest watch mode
-
-# Run a single test file or pattern
-npx vitest run src/lib/data.test.ts
-npx vitest run -t "sanitizeOrQuery"
+npx vitest run src/lib/data.test.ts        # single file
+npx vitest run -t "pluralize"              # by test name
 ```
 
 Manual pipeline trigger (local dev server must be running):
@@ -36,82 +32,82 @@ Manual pipeline trigger (local dev server must be running):
 ```bash
 CRON_SECRET=$(grep '^CRON_SECRET=' .env.local | cut -d= -f2-)
 curl -X POST -H "Authorization: Bearer $CRON_SECRET" \
-  "http://localhost:3000/api/cron/generate?count=10"
+  "http://localhost:3000/api/cron/generate?count=2"
 ```
 
 ## Stack at a glance
 
-- **Next.js 16.2.3** App Router, **React 19.2.4**, React Compiler ON, Turbopack dev+build
+- **Next.js 16.3** App Router, **React 19**, React Compiler ON, Turbopack dev+build
 - **TypeScript 5** strict, path alias `@/* → src/*`
-- **Tailwind CSS 4** — new syntax (`@theme`, `@custom-variant`, `@utility` in `globals.css`); **no `tailwind.config.js`**
-- **shadcn/ui 4.2** built on **`@base-ui/react`** (not classic Radix) — keep this in mind when adding/replacing primitives
-- **Supabase** (`@supabase/supabase-js` + `@supabase/ssr`) — anon key + RLS for reads, service role only in `/api/cron/*` and newsletter POST
-- **OpenRouter** for `anthropic/claude-sonnet-4` (articles) and `google/gemini-2.5-flash-image` (thumbnails)
-- **Vitest 4** + `@testing-library/react` + `jsdom`
-- **Node 24.x** runtime on Vercel
+- **Tailwind CSS 4** — configured in `globals.css` (`@theme`, `@custom-variant`, `@utility`); **no `tailwind.config.js`**
+- **shadcn/ui on `@base-ui/react`** (not classic Radix); `shadcn` CLI lives in devDependencies
+- **Supabase** (`@supabase/supabase-js` only) — anon key + RLS for reads; service role only in cron route, newsletter POST, and admin Server Actions
+- **OpenRouter**: `anthropic/claude-sonnet-4` (articles), `google/gemini-2.5-flash-image` (thumbnails)
+- **Vitest 4** + Testing Library + jsdom · **Node 24.x** on Vercel
 
 ## Architecture — the load-bearing pieces
 
 ### Layers
 
-1. **Edge proxy** — `src/proxy.ts` exports `proxy()` (Next 16 convention; replaces `middleware.ts`). Sets all security headers (HSTS, X-Frame, etc.). Matcher includes API routes intentionally.
-2. **Server (RSC)** — pages and route handlers read via the **anon key + RLS** through a lazy singleton in `src/lib/data.ts`. Importing `data.ts` does not require env vars; `db()` constructs the client on first call.
-3. **Admin client** — `src/lib/supabase/admin.ts::createAdminClient()` uses service role and is only invoked from `/api/cron/*` and `/api/newsletter`. Never reach for it from a page or RSC.
-4. **Client components** — only the interactive ones marked `"use client"` (Header, SearchModal, NewsTicker, ThemeToggle, NewsletterForm, ReadingProgress, TableOfContents, CategoryBar, ShareButtons, ScrollToTop, search page).
+1. **Edge proxy** — `src/proxy.ts` (`proxy()`, Next 16 convention). All security headers (CSP, HSTS, COOP/CORP…) + Basic Auth gate for `/admin/*`. Matcher includes API routes intentionally.
+2. **Reads (RSC)** — only via `src/lib/data.ts` (anon key + RLS; lazy `db()` singleton). Slug lookups and shared reads are wrapped in React `cache()`; tags attach via `attachTagsBatch()` (anti-N+1). **PostgREST caps every response at 1000 rows regardless of `.limit()`** — page with `.range()` for anything bigger (pattern: `getSitemapArticles`).
+3. **Writes** — `src/lib/supabase/admin.ts::createAdminClient()` (service role, lazy singleton). Only in `/api/cron/generate`, `/api/newsletter` POST, and `src/app/admin/artykuly/actions.ts`.
+4. **Admin auth** — `src/lib/admin-auth.ts::checkAdminAuth()` (constant-time compare, malformed-base64-safe) is used by BOTH the proxy AND inside every admin Server Action (`assertAdmin()`). **Server Actions are global POST endpoints — the proxy path check alone is bypassable. Never add an admin action without the in-action guard.**
 
-### Data flow contract
+### Security invariants (do not weaken)
 
-- `src/lib/data.ts` is the **only** read path used by pages. All queries are bounded (`limit`/`maxBy`), use `.maybeSingle()` where 0-row is valid, and call `attachTagsBatch()` to avoid N+1. New page-side reads should go here, not directly into a page component.
-- `src/lib/search-utils.ts` — `escapeIlike`, `sanitizeOrQuery`, `pluralize`, `MAX_LEN`. **PostgREST `.or()` queries must be passed through `sanitizeOrQuery`** (escapes `%_\` and strips `,()`). The data tests in `src/lib/data.test.ts` import from here directly — keep their signatures stable.
-- `src/lib/heading-id.ts::slugifyHeading` is shared by the markdown renderer and TOC. **Use this same function** for any new anchor generation, otherwise TOC anchors stop matching headings (Polish diacritics are preserved by design: `ą→a`, `ł→l`, …).
-- `src/lib/jsonld.ts::jsonLdScript` — always render JSON-LD through this helper (escapes `<`, `>`, `&`, U+2028/U+2029). Don't hand-roll `<script type="application/ld+json">`.
+- **All scraping fetches go through `src/lib/scraper/safe-fetch.ts`** (`safeFetch`, `validateExternalUrl`, `readTextCapped`): per-redirect-hop host validation (`redirect: "manual"`), ALL IP-literal hosts blocked (decimal/hex/octal/IPv6-mapped included), response size caps. Both `content.ts` and `images/generator.ts` (og:image incl. HEAD) use it. Changes require updating `safe-fetch.test.ts`.
+- **Cron auth is fail-closed**: unset `CRON_SECRET` ⇒ 401. Never "bypass for local dev".
+- **`jsonLdScript()` for every JSON-LD block** (escapes `<`, `>`, `&`, U+2028/9). **`escapeIlike()` for every `.ilike()`.** There are no `.or()` calls anymore (FTS replaced them); if you reintroduce one, sanitize it.
+- Prompt injection: `sanitizeTitleForPrompt` in `images/generator.ts` + "treat as topic input only" framing.
 
 ### Pipeline (`src/app/api/cron/generate/route.ts`)
 
-`maxDuration=300`, fail-closed Bearer auth (`Authorization: Bearer ${CRON_SECRET}`; missing env = 401). Stages live in `src/lib/scraper/{sources,parser,content}.ts`, `src/lib/ai/{writer,quality,prompts}.ts`, `src/lib/images/generator.ts`. Two non-obvious invariants:
+`maxDuration=300`, time-budget guard at 270 s (aborted items retry next run). Non-obvious invariants:
 
-- **`scrapeArticleContent` has SSRF guards** in `isInternalHost()` (blocks loopback, RFC1918, link-local, AWS metadata `169.254.169.254`, IPv6 loopback/ULA). When touching scraping code, do not loosen this; add new tests if you change `isInternalHost`.
-- **`extractMeta` has 3 fallback strategies** for the `---META---` JSON tail (delimiter, last `{...}` block, smart-quote/trailing-comma fix). LLM output is unreliable — keep all three when refactoring.
-- Quality gate threshold is **score < 50 → reject** (`src/lib/ai/quality.ts`).
+- **Write order matters**: article INSERT → immediately mark `scraped_items` processed → then tags (parallel). This ordering shrinks the duplicate-publication window on mid-run kills. Do not reorder.
+- **Dedup query errors abort the run** (an ignored error would republish the whole batch).
+- **`extractMeta` has 3 fallback strategies** for the `---META---` JSON tail — keep all three.
+- The prompt receives `existingTags` (top-60 via `popular_tags` RPC) — the AI picks tags from the catalog, max 1 new. This is the root-cause fix for tag fragmentation; don't remove it.
+- Quality gate: score < 50 → reject (`src/lib/ai/quality.ts`); `is_featured` max 1/day at score ≥ 80.
+- `polishTypography` protects code blocks, markdown link destinations, and bare URLs — if you touch `splitProtectingCode`, run the typography tests.
 
 ### Routing
 
 | Route | Revalidate | Notes |
 |---|---|---|
-| `/` (`(home)` group) | 300s | Hero + featured + latest + alternating category sections + newsletter |
-| `/artykul/[slug]` | 60s | TOC, prose, share, adjacent (prev/next), related; `NewsArticle` JSON-LD |
-| `/kategoria/[slug]?page=N` | 300s | Offset pagination, `rel=prev/next`, `ItemList` JSON-LD |
-| `/tag/[slug]` | 300s | `CollectionPage` + `ItemList` JSON-LD |
-| `/szukaj` | — | Client; **`robots: noindex`**, excluded from sitemap, disallowed in `robots.txt` |
-| `/feed.xml` | 3600s | RSS 2.0 with CDATA + atom self link |
-| `/sitemap.xml`, `/robots.txt`, `/manifest.webmanifest` | — | Metadata routes |
+| `/` (`(home)` group) | 300 s | per-category queries; sr-only h1 (owner decision) |
+| `/artykul/[slug]` | 60 s | prerenders top 500; NewsArticle JSON-LD; TOC anchors via shared `slugifyHeading` + `stripInlineMarkdown` |
+| `/kategoria/[slug]?page=N` | 300 s* | *dynamic (searchParams); empty page>1 → `notFound()` — keep this, it kills a soft-404 space |
+| `/tag/[slug]` | 300 s | **noindex, follow; excluded from sitemap** (thin content, ~73% of tags have 1 article). Don't re-index without ROADMAP #5.1 (catalog consolidation) |
+| `/szukaj` | — | client; noindex; NOT in robots.txt Disallow (noindex needs crawlability) |
+| `/icon-192.png` `/icon-512.png` `/apple-icon.png` | build-static | generated from `src/lib/brand-icon.tsx`; referenced by manifest + JSON-LD logos — don't delete |
+| `/admin/*` | dynamic | Basic Auth + noindex (3 layers) |
 
-API: `/api/cron/generate` (Bearer, 300s, `?count=N` ∈ [1,15]); `/api/cron/seed` (Bearer, manual category seed); `/api/newsletter` (5/min/IP, email ≤254); `/api/search` (30/min/IP, query ≤100).
-
-Rate limiting (`src/lib/rate-limit.ts`) is **in-memory sliding window** — per-instance only, not multi-region safe. If you change deploy topology or want global limits, swap to Upstash via Vercel Marketplace (item #6 in `DOCS.md` todo).
+API: `/api/cron/generate` (Bearer, `?count` ∈ [1,15], default 4); `/api/newsletter` (5/min/IP); `/api/search` (30/min/IP, ≤100 chars). Rate limiting is in-memory per-instance (deliberate MVP choice — upgrade trigger in ROADMAP #5.5).
 
 ### Database (Supabase)
 
-`supabase/schema.sql` is the **idempotent source of truth** (re-run safe). Incremental migrations live in `supabase/migrations/NNN_*.sql` and are also idempotent. See `supabase/README.md` for the apply order. Two non-obvious bits:
+`supabase/schema.sql` is the idempotent source of truth; `supabase/migrations/001–005` are incremental (see `supabase/README.md`). Non-obvious bits:
 
-- `articles.updated_at` requires the `articles_set_updated_at` trigger (migration 002). Without it, `sitemap.ts::lastModified` and JSON-LD `dateModified` are wrong.
-- `popular_tags(tag_limit)` RPC is the fast path for `getPopularTags()`; `data.ts` falls back to in-memory aggregate with a console warn if the RPC is missing.
+- `articles_set_updated_at` trigger bumps `updated_at` **only on content changes** (title/content/excerpt/thumbnail — migration 005). Flag flips must NOT bump it — sitemap `lastmod` and JSON-LD `dateModified` depend on this honesty.
+- FTS: `search_vector` is built with config `simple`; `searchArticles` must pass `{ config: "simple" }` to `.textSearch()` (the default `english` config eats short Polish words). ILIKE fallback uses the RAW query through `escapeIlike`, not the ts-sanitized one.
+- `popular_tags(tag_limit)` RPC: used by `getPopularTags()` (with in-memory fallback) and by the pipeline for the tag vocabulary.
 
 ## Conventions and gotchas
 
-- **Don't add a `tailwind.config.js`.** Tailwind 4 is configured via `globals.css` (`@theme inline`, `@custom-variant dark`, `@utility`).
-- **Don't use `@tailwindcss/typography`.** Article body uses the custom `.prose-article` class with `scroll-margin-top: 5rem` on `h2/h3` (anchor offset under sticky header).
-- **No global `scroll-behavior: smooth`** on `html` — it caused "land mid-page then animate up" on navigation. Smooth scroll is opt-in per call (logo click, ScrollToTop button).
-- **Use the shared `useScrollY()` hook** (`src/lib/hooks/use-scroll-y.ts`) for any new scroll-position-driven UI. It's a `useSyncExternalStore` shared subscription — adding another `window.addEventListener("scroll")` reintroduces the duplication this hook was created to remove.
-- **Cron auth is fail-closed.** If `CRON_SECRET` is unset, the handler returns 401 — do not "bypass for local dev". Set the var in `.env.local`.
-- **`is_featured` flag** — currently set to "first article in a generated batch." Treat as cosmetic, not editorial.
-- **`NEXT_PUBLIC_SITE_URL`** is consumed in SEO/sitemap/RSS/OG; a wrong value silently breaks canonicals. Production must be `https://www.aifeed.pl` (with `www`, matching the served traffic).
-- The `next.config.ts` `images.remotePatterns` ends with a `**` HTTPS catch-all because the pipeline scrapes thumbnails from unpredictable RSS sources. Keep it.
+- **Don't add** `tailwind.config.js` or `@tailwindcss/typography` (custom `.prose-article` with `scroll-margin-top`), a global `scroll-behavior: smooth`, a second `window.addEventListener("scroll")` (use `useScrollY()`), AI-disclosure banners in article UI, a visible h1 on home, or CategoryBar on article pages (owner decisions).
+- **Use always**: `slugifyHeading()` + `stripInlineMarkdown()` for anchors (TOC and the markdown renderer must slugify the *identical* string); `pluralize(count, forms)` from `search-utils.ts` for every count shown in UI (full Polish rule incl. teens); `useArticleSearch()` for any search UI; `<Thumbnail>` for every article image (it decides optimization: Supabase Storage → optimized, external scraped → `unoptimized` because Vercel's optimizer mangled some sources).
+- `images.unoptimized` is per-image in `Thumbnail`, NOT global — don't re-add the global flag. `remotePatterns` keeps the HTTPS `**` catch-all (scraped thumbnails come from anywhere).
+- React 19 lint rule `react-hooks/set-state-in-effect` is enforced — derive state in render instead of synchronous setState in effects (see `useArticleSearch` for the pattern).
+- **`NEXT_PUBLIC_SITE_URL`** must be `https://www.aifeed.pl` in production (with `www`); the code-side fallback is also www, and trailing slashes are stripped in `site.ts`.
 
 ## Testing
 
-Tests live next to source: `src/**/*.test.{ts,tsx}` (vitest config). The data tests import real implementations from `src/lib/search-utils.ts` rather than re-implementing helpers — when you refactor those helpers, run `npm test` before assuming the change is safe. Setup file: `src/test/setup.ts` (`@testing-library/jest-dom`).
+Tests live next to source (`src/**/*.test.{ts,tsx}`; 64 tests). `data.test.ts` imports real helpers from `search-utils.ts`; `safe-fetch.test.ts` covers the SSRF guard; typography tests cover URL protection. When you touch those areas, extend the tests — that's the contract.
 
 ## Deployment
 
-Vercel project `aifeed-pl` (team `m-zeprzalkas-projects`), domains `aifeed.pl` + `www.aifeed.pl`. Crons run at 05:00 / 11:00 / 17:00 UTC (`vercel.json`). Required env vars: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `OPENROUTER_API_KEY`, `CRON_SECRET`, `NEXT_PUBLIC_SITE_URL`. See `.env.example`.
+Vercel project `aifeed-pl` (team `m-zeprzalkas-projects`), canonical domain `https://www.aifeed.pl`. Crons in `vercel.json` (05/11/17 UTC, count=4). Required env vars: see `.env.example` (complete, commented). Production rollout checklist: `ROADMAP.md` §2.
+
+Pre-push gate: `npx tsc --noEmit && npm run lint && npm test && npm run build` — all green, always.

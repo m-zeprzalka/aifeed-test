@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { pluralize } from "@/lib/search-utils";
 
 interface PaginationProps {
   basePath: string;
@@ -40,7 +41,7 @@ export function Pagination({
       className={cn("flex items-center justify-between gap-4 pt-10", className)}
     >
       <div className="text-[12px] font-mono text-muted-foreground/85">
-        {total > 0 && `${total} artykuł${total === 1 ? "" : total < 5 ? "y" : "ów"} · str. ${page}/${totalPages}`}
+        {total > 0 && `${total} ${pluralize(total, ["artykuł", "artykuły", "artykułów"])} · str. ${page}/${totalPages}`}
       </div>
 
       <div className="flex items-center gap-2">

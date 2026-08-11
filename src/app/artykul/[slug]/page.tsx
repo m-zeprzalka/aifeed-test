@@ -2,7 +2,7 @@ import { cache } from "react";
 import { notFound } from "next/navigation";
 import { Thumbnail } from "@/components/ui/thumbnail";
 import Link from "next/link";
-import { Clock, ExternalLink, Calendar, ChevronLeft, ChevronRight, UserRound } from "lucide-react";
+import { Clock, ExternalLink, Calendar, ChevronLeft, ChevronRight } from "lucide-react";
 import { getArticleBySlug, getAdjacentArticles, getRelatedArticles, getSitemapArticles } from "@/lib/data";
 import { ArticleCard } from "@/components/articles/article-card";
 import { Breadcrumbs } from "@/components/articles/breadcrumbs";
@@ -119,14 +119,15 @@ export default async function ArticlePage({ params }: PageProps) {
     ...((article.updated_at || article.published_at) && {
       dateModified: article.updated_at || article.published_at,
     }),
-    // Person zamiast Organization (ROADMAP §3.2 / backlog #5.2) — imienny,
-    // weryfikowalny autor to najsilniejszy pojedynczy sygnał E-E-A-T. Encja
-    // spójna z Person JSON-LD na /redakcja i `founder` w layout.tsx.
+    // Organization, NIE Person — decyzja właściciela (2026-08-11): nazwisko
+    // firmuje SERWIS (Person JSON-LD na /redakcja + `founder` w layout.tsx),
+    // ale nie pojedyncze artykuły. Per-artykuł Person sugerowałby ręczne
+    // autorstwo każdego tekstu — przy zautomatyzowanym pipeline to profil
+    // "fikcyjnych bylines" (BNN Breaking). Nie przywracać bez zmiany procesu.
     author: {
-      "@type": "Person",
-      name: siteConfig.author.name,
-      url: `${siteConfig.url}/redakcja`,
-      sameAs: siteConfig.author.sameAs,
+      "@type": "Organization",
+      name: siteConfig.name,
+      url: siteConfig.url,
     },
     publisher: {
       "@type": "Organization",
@@ -166,30 +167,19 @@ export default async function ArticlePage({ params }: PageProps) {
             <Breadcrumbs items={breadcrumbItems} />
           </div>
 
-          {/* Meta — byline linkuje do /redakcja (E-E-A-T: widoczny,
-              weryfikowalny autor serwisu; „Redakcja:" zamiast sugerowania
-              ręcznego autorstwa tekstu — proces opisany na /o-serwisie). */}
-          <div className="mb-5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
-            <Link
-              href="/redakcja"
-              className="flex items-center gap-1.5 text-xs font-mono tracking-wide text-muted-foreground hover:text-foreground transition-colors"
-            >
-              <UserRound className="size-3" aria-hidden="true" />
-              Redakcja: {siteConfig.author.name}
-            </Link>
-            <span className="size-0.5 rounded-full bg-muted-foreground/30" aria-hidden="true" />
+          {/* Meta. Bez bylinu autora — decyzja właściciela: nazwisko firmuje
+              serwis (/redakcja), nie pojedyncze artykuły. */}
+          <div className="mb-5 flex items-center gap-3">
             {publishedDate && article.published_at && (
-              <>
-                <time
-                  dateTime={article.published_at}
-                  className="flex items-center gap-1.5 text-xs font-mono tracking-wide text-muted-foreground"
-                >
-                  <Calendar className="size-3" aria-hidden="true" />
-                  {publishedDate}
-                </time>
-                <span className="size-0.5 rounded-full bg-muted-foreground/30" aria-hidden="true" />
-              </>
+              <time
+                dateTime={article.published_at}
+                className="flex items-center gap-1.5 text-xs font-mono tracking-wide text-muted-foreground"
+              >
+                <Calendar className="size-3" aria-hidden="true" />
+                {publishedDate}
+              </time>
             )}
+            <span className="size-0.5 rounded-full bg-muted-foreground/30" aria-hidden="true" />
             <span className="flex items-center gap-1.5 text-xs font-mono tracking-wide text-muted-foreground">
               <Clock className="size-3" aria-hidden="true" />
               {article.reading_time} min czytania

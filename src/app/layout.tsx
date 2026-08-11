@@ -45,8 +45,11 @@ export const metadata: Metadata = {
   description: siteConfig.description,
   metadataBase: new URL(siteConfig.url),
   applicationName: siteConfig.name,
-  authors: [{ name: siteConfig.author.name, url: `${siteConfig.url}/redakcja` }],
-  creator: siteConfig.author.name,
+  // Redakcja jako całość, nie osoba — `<meta name="author">` dziedziczy na
+  // wszystkie strony (w tym artykuły), a nazwisko firmuje serwis (/redakcja,
+  // `founder` niżej), nie pojedyncze teksty (decyzja właściciela 2026-08-11).
+  authors: [{ name: siteConfig.name, url: siteConfig.url }],
+  creator: siteConfig.name,
   publisher: siteConfig.name,
   category: "technology",
   formatDetection: {

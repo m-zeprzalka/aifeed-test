@@ -86,7 +86,7 @@ Komendy: `npm run dev` · `npm run build` · `npm run lint` (musi być 0/0) · `
 | `/news-sitemap.xml` | 900 s | Google News sitemap — tylko artykuły < 48 h (starsze Google ignoruje); zgłoszona w robots.txt |
 | `/indexnow.txt` | dynamic | klucz IndexNow z env (`INDEXNOW_KEY`; brak → 404) |
 | `/o-serwisie` | static | strona transparentności: proces redakcyjny, źródła, polityka korekt (kotwice = cele `publishingPrinciples`/`correctionsPolicy` w JSON-LD) |
-| `/redakcja` | static | autor serwisu (Michał Zeprzałka) — Person JSON-LD z `sameAs`; cel bylinów z artykułów i `founder`/`author` w JSON-LD |
+| `/redakcja` | static | twórca serwisu (Michał Zeprzałka) — Person JSON-LD z `sameAs` + `founder` w NewsMediaOrganization. **Nazwisko firmuje serwis, nie artykuły**: autor artykułów = Organization, bez bylinu (decyzja właściciela) |
 | `/icon-192.png`, `/icon-512.png`, `/apple-icon.png` | build | generowane z `src/lib/brand-icon.tsx` (wpisane w manifest + JSON-LD logo) |
 | `/admin`, `/admin/artykuly` | dynamic | Basic Auth + noindex ×3 warstwy; dashboard telemetrii + zarządzanie artykułami |
 

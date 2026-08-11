@@ -86,7 +86,7 @@ curl -X POST -H "Authorization: Bearer $CRON_SECRET" \
 | `/szukaj` | — | client; noindex; NOT in robots.txt Disallow (noindex needs crawlability) |
 | `/news-sitemap.xml` | 900 s | Google News sitemap, only articles < 48 h; listed in robots.txt next to sitemap.xml |
 | `/indexnow.txt` | dynamic | IndexNow key from env (`INDEXNOW_KEY`; unset → 404) |
-| `/redakcja` | static | author page (Person JSON-LD, `siteConfig.author`); target of article bylines ("Redakcja: …" — deliberately not a plain byline) and `founder`/`author` entities |
+| `/redakcja` | static | site-creator page (Person JSON-LD, `siteConfig.author`) + `founder` in NewsMediaOrganization. **The name endorses the SITE, not individual articles**: article `author` stays Organization, no visible byline (owner decision — don't add per-article Person/bylines without a process change) |
 | `/icon-192.png` `/icon-512.png` `/apple-icon.png` | build-static | generated from `src/lib/brand-icon.tsx`; referenced by manifest + JSON-LD logos — don't delete |
 | `/admin/*` | dynamic | Basic Auth + noindex (3 layers) |
 

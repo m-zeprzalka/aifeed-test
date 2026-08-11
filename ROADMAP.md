@@ -115,8 +115,8 @@ Co Google toleruje, a nawet nagradza (udokumentowane cechy „ocalałych"): umia
 
 To jest jednocześnie Twój cel wizerunkowy — serwis firmowany nazwiskiem buduje markę osobistą.
 
-- [x] ~~**Decyzja właściciela**~~ ✅ 2026-08-11: TAK — serwis firmowany nazwiskiem **Michał Zeprzałka** (zeprzalka.com); cel: marka osobista i pozycja w branży AI.
-- [x] ~~Strona **`/redakcja`**~~ ✅ 2026-08-11: bio (Digital Solutions Architect, 12+ lat), podział ról człowiek/automatyzacja, Person JSON-LD z `sameAs` (zeprzalka.com, GitHub, Facebook). Autor w NewsArticle JSON-LD: `Person` + widoczny byline „Redakcja: Michał Zeprzałka" na artykułach (celowo „Redakcja:", nie goły podpis — fikcyjne bylines to profil BNN Breaking). `founder` w NewsMediaOrganization. **Zostało:** zdjęcie + LinkedIn, gdy będziesz chciał je dodać.
+- [x] ~~**Decyzja właściciela**~~ ✅ 2026-08-11: TAK, ale **na poziomie serwisu, nie artykułów** — nazwisko **Michał Zeprzałka** (zeprzalka.com) firmuje serwis i proces (`/redakcja`, `founder` w NewsMediaOrganization); autor pojedynczych artykułów pozostaje `Organization` (AiFeed), **bez bylinu** na stronach artykułów. Uzasadnienie: per-artykuł Person przy w pełni zautomatyzowanej produkcji = profil „fikcyjnych bylines" (BNN Breaking); poziom serwisu daje sygnał E-E-A-T bez tego ryzyka. Nie zmieniać bez zmiany procesu (np. realna korekta każdego tekstu).
+- [x] ~~Strona **`/redakcja`**~~ ✅ 2026-08-11: bio (Digital Solutions Architect, 12+ lat), podział ról człowiek/automatyzacja, Person JSON-LD z `sameAs` (zeprzalka.com, GitHub, Facebook). **Zostało:** zdjęcie + LinkedIn, gdy będziesz chciał je dodać.
 - [x] ~~Rozbudowa **`/o-serwisie`**~~ ✅ 2026-08-11: sekcje „Jak powstają nasze teksty", „Skąd czerpiemy informacje", polityka korekt z kontaktem; kotwice podpięte pod `publishingPrinciples`/`correctionsPolicy` w JSON-LD.
 - [ ] `siteConfig.links` + `Organization.sameAs`: realne profile (LinkedIn, X/GitHub) — załóż, jeśli nie istnieją.
 

@@ -34,7 +34,7 @@ Budżet czasowy: `maxDuration=300`, guard przerywa pętlę po 270 s — nieprzet
 | Komponenty | shadcn/ui na `@base-ui/react` | NIE klasyczny Radix |
 | Dane | Supabase (Postgres + Storage) | anon key + RLS dla odczytów; service role tylko cron/newsletter/admin |
 | LLM | OpenRouter | Claude Sonnet 5 (teksty), Gemini 2.5 Flash Image (miniatury) |
-| Testy | Vitest 4 + Testing Library + jsdom | 77 testów |
+| Testy | Vitest 4 + Testing Library + jsdom | 84 testy |
 | Hosting | Vercel (projekt `aifeed-pl`) | Node 24, Fluid Compute |
 
 ## 3. Quick start

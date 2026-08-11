@@ -111,7 +111,7 @@ API: `/api/cron/generate` (Bearer, `?count` ∈ [1,15], default 4; crons call wi
 
 ## Testing
 
-Tests live next to source (`src/**/*.test.{ts,tsx}`; 77 tests). `data.test.ts` imports real helpers from `search-utils.ts`; `safe-fetch.test.ts` covers the SSRF guard; typography tests cover URL protection; `internal-links.test.ts` covers the internal-link whitelist. When you touch those areas, extend the tests — that's the contract.
+Tests live next to source (`src/**/*.test.{ts,tsx}`; 84 tests). `data.test.ts` imports real helpers from `search-utils.ts`; `safe-fetch.test.ts` covers the SSRF guard; typography tests cover URL protection; `internal-links.test.ts` covers the internal-link whitelist; `parser.test.ts` covers multi-source title matching. When you touch those areas, extend the tests — that's the contract.
 
 ## Deployment
 

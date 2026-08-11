@@ -1,4 +1,5 @@
 import { ARTICLE_SYSTEM_PROMPT, ARTICLE_USER_PROMPT } from "./prompts";
+import { sanitizeInternalLinks } from "./internal-links";
 import { polishTypography } from "../typography";
 import { logPipelineEvent } from "@/lib/telemetry";
 
@@ -153,6 +154,10 @@ export async function generateArticle(
   // Katalog istniejących tagów przekazywany do promptu (dyscyplina
   // słownika — zob. komentarz w prompts.ts).
   existingTags: string[] = [],
+  // Kandydaci do linkowania wewnętrznego (tytuł + slug ostatnich artykułów).
+  // AI wplata 1-3 kontekstowe linki; sanitizeInternalLinks gwarantuje, że w
+  // treści zostają wyłącznie linki do slugów z tej listy (zero wewnętrznych 404).
+  internalLinkCandidates: { title: string; slug: string }[] = [],
 ): Promise<GeneratedArticle> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
@@ -172,7 +177,7 @@ export async function generateArticle(
       },
       {
         role: "user",
-        content: ARTICLE_USER_PROMPT(topic, sourceUrls, sourceDescriptions, sourceContent, existingTags),
+        content: ARTICLE_USER_PROMPT(topic, sourceUrls, sourceDescriptions, sourceContent, existingTags, internalLinkCandidates),
       },
     ],
   });
@@ -238,11 +243,16 @@ export async function generateArticle(
 
   // Split content and metadata — flexible delimiter matching
   const meta = extractMeta(responseText);
-  // Two-step pipeline: normalizeMarkdown handles structural fixes (lists,
-  // headings, blank lines), polishTypography handles cosmetic Polish rules
+  // Three-step pipeline: normalizeMarkdown handles structural fixes (lists,
+  // headings, blank lines), sanitizeInternalLinks enforces the internal-link
+  // whitelist (links outside `internalLinkCandidates` become plain text — no
+  // hallucinated 404s), polishTypography handles cosmetic Polish rules
   // (NBSP after one-letter prepositions, en/em-dash, „cudzysłowy"). Splitting
-  // them keeps the structural pass deterministic and individually testable.
-  const content = polishTypography(normalizeMarkdown(meta._content));
+  // them keeps each pass deterministic and individually testable.
+  const allowedSlugs = new Set(internalLinkCandidates.map((c) => c.slug));
+  const content = polishTypography(
+    sanitizeInternalLinks(normalizeMarkdown(meta._content), allowedSlugs)
+  );
   const excerpt = meta.excerpt
     ? polishTypography(meta.excerpt)
     : content.slice(0, 200);

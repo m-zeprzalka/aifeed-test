@@ -1,4 +1,4 @@
-import { Newspaper, Layers, Rss, Zap, Mail } from "lucide-react";
+import { Newspaper, Layers, Rss, Zap, Mail, SearchCheck, FileCheck2, ShieldAlert } from "lucide-react";
 import Link from "next/link";
 import { siteConfig } from "@/config/site";
 import { staticPageMetadata } from "@/lib/seo";
@@ -6,9 +6,13 @@ import { staticPageMetadata } from "@/lib/seo";
 export const metadata = staticPageMetadata({
   title: "O serwisie",
   description:
-    "AiFeed to magazyn informacyjny o sztucznej inteligencji w języku polskim. Dowiedz się, co znajdziesz w serwisie i jak go najlepiej wykorzystać.",
+    "AiFeed to magazyn informacyjny o sztucznej inteligencji po polsku. Poznaj naszą misję, źródła, proces redakcyjny i standardy jakości.",
   path: "/o-serwisie",
 });
+
+// Sekcje `#jak-powstaja-teksty`, `#zrodla` i `#zglos-blad` są celami linków
+// `publishingPrinciples` / `correctionsPolicy` w JSON-LD NewsMediaOrganization
+// (root layout). Zmiana `id` wymaga aktualizacji layout.tsx.
 
 export default function AboutPage() {
   return (
@@ -74,6 +78,88 @@ export default function AboutPage() {
         </div>
       </section>
 
+      {/* Section: How our texts are created — strona transparentności
+          (rekomendacja Google "adding information on how your content was
+          created" + twardy wymóg AdSense). To celowo NIE jest banner na
+          artykułach — proces opisujemy w jednym miejscu, tutaj. */}
+      <section id="jak-powstaja-teksty" className="mb-10 scroll-mt-24">
+        <p className="mb-2 text-[10px] font-mono font-bold uppercase tracking-widest text-primary">
+          Proces redakcyjny
+        </p>
+        <h2 className="text-lg sm:text-xl font-bold tracking-tight mb-4">
+          Jak powstają nasze teksty
+        </h2>
+        <p className="text-sm text-muted-foreground leading-relaxed mb-4">
+          {siteConfig.name} działa w modelu, który łączy technologię z redakcyjnymi standardami.
+          Monitorujemy na bieżąco około 20 starannie wybranych, renomowanych źródeł — serwisy
+          technologiczne, blogi badawcze producentów AI i preprinty naukowe. Z tego strumienia
+          wybieramy tematy o największej wartości informacyjnej, a teksty w języku polskim
+          przygotowujemy z wykorzystaniem modeli językowych — według ścisłych, jawnych zasad:
+        </p>
+        <ul className="space-y-3 mb-4">
+          {[
+            {
+              icon: SearchCheck,
+              title: "Wierność źródłu",
+              text: "Każdy tekst powstaje wyłącznie na podstawie treści oryginalnego materiału. Fakty, liczby, daty i cytaty muszą mieć pokrycie w źródle — dodawanie informacji spoza niego jest zabronione na poziomie procesu.",
+            },
+            {
+              icon: FileCheck2,
+              title: "Bramka jakości",
+              text: "Zanim artykuł trafi na stronę, przechodzi automatyczną kontrolę jakości (struktura, kompletność, obecność linku do źródła, język). Teksty poniżej progu są odrzucane, nie publikowane.",
+            },
+            {
+              icon: Rss,
+              title: "Zawsze z linkiem do oryginału",
+              text: "Każdy artykuł linkuje do materiału źródłowego już w pierwszych akapitach, a pełną listę źródeł znajdziesz pod tekstem. Zachęcamy do sięgania po oryginały.",
+            },
+          ].map((item) => (
+            <li key={item.title} className="flex gap-3 rounded-xl border border-border/40 bg-card/80 p-4">
+              <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <item.icon className="size-4" aria-hidden="true" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold mb-1">{item.title}</h3>
+                <p className="text-xs text-muted-foreground leading-relaxed">{item.text}</p>
+              </div>
+            </li>
+          ))}
+        </ul>
+        <p className="text-sm text-muted-foreground leading-relaxed">
+          Tam, gdzie ma to wartość, dodajemy polski kontekst: co nowość oznacza dla użytkowników
+          w Polsce, jak ma się do unijnych regulacji (np. AI Act) i jakie są lokalne odpowiedniki
+          opisywanych narzędzi.
+        </p>
+        <p className="mt-4 text-sm text-muted-foreground leading-relaxed">
+          Serwis, jego kod oraz cały proces redakcyjny są autorstwa jednej osoby —{" "}
+          <Link href="/redakcja" className="font-medium text-foreground underline underline-offset-2 hover:text-primary transition-colors">
+            poznaj redakcję
+          </Link>
+          .
+        </p>
+      </section>
+
+      {/* Section: Sources */}
+      <section id="zrodla" className="mb-10 scroll-mt-24">
+        <p className="mb-2 text-[10px] font-mono font-bold uppercase tracking-widest text-primary">
+          Źródła
+        </p>
+        <h2 className="text-lg sm:text-xl font-bold tracking-tight mb-4">
+          Skąd czerpiemy informacje
+        </h2>
+        <p className="text-sm text-muted-foreground leading-relaxed mb-4">
+          Piszemy wyłącznie na podstawie renomowanych źródeł o ugruntowanej reputacji. Należą do
+          nich m.in.: oficjalne blogi OpenAI, Google AI i DeepMind, Anthropic i Hugging Face,
+          serwisy MIT Technology Review, TechCrunch, The Verge, Ars Technica, Wired i VentureBeat,
+          repozytorium naukowe arXiv, a z polskiego podwórka Spider&apos;s Web, AntyWeb
+          i Niebezpiecznik.
+        </p>
+        <p className="text-sm text-muted-foreground leading-relaxed">
+          Lista jest kuratorowana ręcznie — dodajemy tylko źródła, które same przestrzegają
+          standardów rzetelności. Nie korzystamy z anonimowych agregatorów treści ani farm newsów.
+        </p>
+      </section>
+
       {/* Stats */}
       <section className="mb-10">
         <p className="mb-2 text-[10px] font-mono font-bold uppercase tracking-widest text-primary">
@@ -84,7 +170,7 @@ export default function AboutPage() {
         </h2>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
           {[
-            { icon: Newspaper, value: "50+", label: "Artykułów tygodniowo" },
+            { icon: Newspaper, value: "40+", label: "Artykułów tygodniowo" },
             { icon: Layers, value: `${siteConfig.categories.length}`, label: "Kategorii tematycznych" },
             { icon: Rss, value: "RSS", label: "Otwarty kanał" },
             { icon: Zap, value: "24/7", label: "Codzienne aktualizacje" },
@@ -105,17 +191,29 @@ export default function AboutPage() {
         </div>
       </section>
 
-      {/* Contact */}
-      <section>
+      {/* Corrections policy + contact — cel `correctionsPolicy` /
+          `actionableFeedbackPolicy` w JSON-LD (layout.tsx). */}
+      <section id="zglos-blad" className="scroll-mt-24">
         <p className="mb-2 text-[10px] font-mono font-bold uppercase tracking-widest text-primary">
-          Kontakt
+          Standardy i kontakt
         </p>
         <h2 className="text-lg sm:text-xl font-bold tracking-tight mb-4">
-          Masz pytanie lub sugestię?
+          Zauważyłeś błąd? Powiedz nam o tym
         </h2>
+        <div className="flex gap-3 rounded-xl border border-border/40 bg-card/80 p-4 mb-4">
+          <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <ShieldAlert className="size-4" aria-hidden="true" />
+          </div>
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            Zależy nam na rzetelności. Jeśli znajdziesz w artykule błąd merytoryczny, nieaktualną
+            informację albo problem z tłumaczeniem — napisz do nas, podając link do tekstu.
+            Zgłoszenia weryfikujemy ze źródłem; błędne treści poprawiamy, a teksty, których nie
+            da się obronić, wycofujemy z serwisu. Data modyfikacji artykułu zawsze odzwierciedla
+            rzeczywistą zmianę treści.
+          </p>
+        </div>
         <p className="text-sm text-muted-foreground leading-relaxed mb-4">
-          Chętnie usłyszymy od Ciebie. Jeśli zauważyłeś błąd, masz propozycję tematu, albo chcesz
-          nawiązać współpracę — napisz do nas.
+          Ten sam adres działa dla propozycji tematów, sugestii nowych źródeł i współpracy.
         </p>
         <a
           href="mailto:kontakt@aifeed.pl"

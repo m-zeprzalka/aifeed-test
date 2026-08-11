@@ -114,10 +114,12 @@ export function buildPageMetadata(
       siteName: siteConfig.name,
       images: imageObject,
       // Article-specific OG fields. TypeScript narrows by `type`.
+      // `article:author` wskazuje stronę autora (/redakcja), nie home —
+      // spójnie z Person JSON-LD.
       ...(isArticle && {
         publishedTime: (input as ArticlePageMetadataInput).publishedTime,
         modifiedTime: (input as ArticlePageMetadataInput).modifiedTime,
-        authors: [siteConfig.url],
+        authors: [`${siteConfig.url}/redakcja`],
         section: (input as ArticlePageMetadataInput).section,
         tags: (input as ArticlePageMetadataInput).tags,
       }),

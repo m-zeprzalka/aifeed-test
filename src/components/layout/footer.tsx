@@ -50,6 +50,11 @@ export function Footer() {
                 </Link>
               </li>
               <li>
+                <Link href="/redakcja" className="text-sm text-foreground/70 hover:text-foreground transition-colors">
+                  Redakcja
+                </Link>
+              </li>
+              <li>
                 <Link
                   href="/feed.xml"
                   className="text-sm text-foreground/70 hover:text-foreground transition-colors"
@@ -64,6 +69,18 @@ export function Footer() {
                 >
                   Polityka Prywatności
                 </Link>
+              </li>
+              <li>
+                {/* Preferred Sources deep link (ROADMAP §3.4) — zewnętrzny,
+                    prowadzi do ustawień źródeł zalogowanego użytkownika Google. */}
+                <a
+                  href={siteConfig.preferredSourcesUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-sm text-foreground/70 hover:text-foreground transition-colors"
+                >
+                  Dodaj do źródeł Google
+                </a>
               </li>
             </ul>
           </div>

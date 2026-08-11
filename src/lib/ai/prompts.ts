@@ -31,15 +31,18 @@ ABSOLUTNE ZASADY — ZŁAMANIE KTÓREJKOLWIEK DYSKWALIFIKUJE ARTYKUŁ:
 7. LINK DO ŹRÓDŁA: W PIERWSZYM lub DRUGIM akapicie OBOWIĄZKOWO zamieść link do oryginału w formacie [tekst](url).
 8. OBIEKTYWIZM: Bądź obiektywny. Przedstawiaj różne punkty widzenia tylko jeśli pojawiają się w źródle.
 9. DATA: Dzisiejsza data to ${new Date().toISOString().split("T")[0]}. Weryfikuj spójność dat — nie pisz o wydarzeniach z przyszłości jako przeszłych i odwrotnie.
+10. KONTEKST DLA POLSKI (wartość dodana): gdy temat ma praktyczne znaczenie dla polskiego czytelnika, dodaj sekcję "## Co to oznacza dla Polski": dostępność produktu/usługi w Polsce, orientacyjna cena w złotówkach (WYŁĄCZNIE przeliczenie ceny podanej w źródle, z dopiskiem "około"), kontekst regulacyjny UE/AI Act, polskie zastosowania lub odpowiedniki narzędzi. Sekcja musi wynikać ze źródła i z powszechnie znanych, stabilnych faktów o polskim rynku — ZAKAZ wymyślania dat premier w Polsce, konkretnych cen i szczegółów spoza źródła. Gdy temat jest czysto naukowy/techniczny i polski kąt byłby sztuczny — POMIŃ sekcję (lepiej brak niż ogólniki).
 ${CATEGORY_STYLE_GUIDE}
 
 OBOWIĄZKOWA STRUKTURA ARTYKUŁU:
 1. Wstęp z linkiem do źródła (1-2 akapity) — zwięzłe wprowadzenie, najważniejsza informacja first
-2. ## Kluczowe wnioski — sekcja z 3-5 bullet points zawierającymi esencję artykułu
-3. Rozwinięcie w 2-3 sekcjach ## — szczegóły, kontekst, cytaty
-4. Krótkie podsumowanie (1-2 zdania)
+2. Sekcja ## z 3-5 bullet points zawierającymi esencję artykułu. Nagłówek wybierz spośród: "Kluczowe wnioski", "Najważniejsze informacje", "Kluczowe informacje", "Główne wnioski" — wariuj między artykułami.
+3. Rozwinięcie w 2-4 sekcjach ## — nagłówki treściowe, specyficzne dla tematu (NIE generyczne "Rozwinięcie", "Szczegóły")
+4. Jeśli temat na to pozwala: sekcja "## Co to oznacza dla Polski" (zasada 10)
+5. Krótkie podsumowanie (1-2 zdania)
 
-Sekcja "Kluczowe wnioski" jest OBOWIĄZKOWA. Artykuł bez niej jest niekompletny.`;
+Sekcja z kluczowymi wnioskami jest OBOWIĄZKOWA. Artykuł bez niej jest niekompletny.
+RÓŻNORODNOŚĆ: wariuj długość akapitów, liczbę sekcji i rytm zdań między artykułami — identyczny szkielet każdego tekstu to sygnał masowej produkcji, którego unikamy.`;
 
 export const ARTICLE_USER_PROMPT = (
   topic: string,
@@ -49,9 +52,28 @@ export const ARTICLE_USER_PROMPT = (
   // Katalog istniejących tagów — AI wybiera z listy zamiast tworzyć
   // warianty pisowni ("GPT-5" vs "GPT 5" vs "gpt-5"). Bez tej dyscypliny
   // katalog urósł do ~2 tagów-sierot na artykuł (thin content dla Google).
-  existingTags: string[] = []
+  existingTags: string[] = [],
+  // Ostatnie opublikowane artykuły AiFeed (tytuł + slug) — AI wplata 1-3
+  // kontekstowe linki wewnętrzne WYŁĄCZNIE z tej listy. Linki spoza listy
+  // usuwa `sanitizeInternalLinks` w writer.ts (twarda gwarancja braku 404).
+  internalLinkCandidates: { title: string; slug: string }[] = []
 ) => {
   const hasContent = sourceContent.trim().length > 100;
+
+  const internalLinksBlock =
+    internalLinkCandidates.length > 0
+      ? `
+
+LINKOWANIE WEWNĘTRZNE (SEO — opcjonalne, maksymalnie 3 linki):
+Poniżej lista ostatnich artykułów AiFeed. Jeśli któryś jest TEMATYCZNIE powiązany z treścią, wpleć w sekcje rozwinięcia 1-3 linki wewnętrzne w formacie [opisowa kotwica](/artykul/slug) — naturalnie, w miejscu gdzie czytelnik realnie skorzysta z kontekstu.
+- Używaj WYŁĄCZNIE slugów z listy poniżej, dokładnie w podanej formie. Linki spoza listy zostaną automatycznie usunięte.
+- NIE linkuj w pierwszym akapicie (tam jest link do źródła) ani w sekcji kluczowych wniosków.
+- Kotwica opisuje temat linkowanego artykułu ("premiera GPT-5", "nowe regulacje AI Act") — nigdy "kliknij tutaj" ani goły URL.
+- Jeśli żaden artykuł nie pasuje tematycznie — nie linkuj wcale. Wymuszony link szkodzi bardziej niż jego brak.
+
+OSTATNIE ARTYKUŁY AIFEED:
+${internalLinkCandidates.map((a) => `- /artykul/${a.slug} — ${a.title}`).join("\n")}`
+      : "";
 
   return `Zaadaptuj poniższy artykuł na język polski dla czytelników AiFeed.
 ${hasContent ? "Bazuj WYŁĄCZNIE na dostarczonej treści źródłowej." : "UWAGA: Nie udało się pobrać pełnej treści źródła. Bazuj na dostępnym opisie — pisz ostrożnie, nie dodawaj niczego od siebie."}
@@ -80,11 +102,11 @@ WYMAGANIA TREŚCIOWE:
 - Zachowaj wszystkie kluczowe informacje, liczby i cytaty z oryginału
 - Naturalny dziennikarski polski — nie tłumacz dosłownie, ale wiernie oddaj sens
 - NIE zaczynaj od nagłówka # — od razu wstęp z linkiem
-- Dopasuj styl do wybranej kategorii (news, analiza, tutorial itd.)
+- Dopasuj styl do wybranej kategorii (news, analiza, tutorial itd.)${internalLinksBlock}
 
 Na samym końcu odpowiedzi, po linii "---META---", podaj metadane jako JSON:
 {
-  "title": "POLSKI tytuł wierny treści źródła — bez sensacji i clickbaitu. NIGDY nie zostawiaj angielskiego headline'a, nawet jeśli źródło jest anglojęzyczne — ZAWSZE tłumacz/adaptuj na polski. Nazwy własne (OpenAI, GPT-5, Claude) w oryginale.",
+  "title": "POLSKI tytuł wierny treści źródła — bez sensacji i clickbaitu. Maksymalnie ~70 znaków, kluczowa nazwa/fraza jak najbliżej początku (SEO). NIGDY nie zostawiaj angielskiego headline'a, nawet jeśli źródło jest anglojęzyczne — ZAWSZE tłumacz/adaptuj na polski. Nazwy własne (OpenAI, GPT-5, Claude) w oryginale.",
   "excerpt": "150-160 znaków, zawiera kluczowe słowo z tytułu, zachęca do przeczytania ale BEZ clickbaitu, podsumowuje główną wartość artykułu — optymalne dla Google",
   "category": "jedna z: modele-ai, badania, biznes, etyka, narzedzia, poradniki",
   "tags": ["tag po polsku 1", "tag 2", "tag 3", "tag 4"],

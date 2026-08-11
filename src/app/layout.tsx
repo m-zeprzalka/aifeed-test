@@ -45,8 +45,8 @@ export const metadata: Metadata = {
   description: siteConfig.description,
   metadataBase: new URL(siteConfig.url),
   applicationName: siteConfig.name,
-  authors: [{ name: siteConfig.name, url: siteConfig.url }],
-  creator: siteConfig.name,
+  authors: [{ name: siteConfig.author.name, url: `${siteConfig.url}/redakcja` }],
+  creator: siteConfig.author.name,
   publisher: siteConfig.name,
   category: "technology",
   formatDetection: {
@@ -122,13 +122,29 @@ const supabaseOrigin = (() => {
 // state. `sameAs` is intentionally omitted: it should only list verified,
 // owned social profiles (none yet). Pointing schema.org at 404s damages
 // structured-data trust signals — Google flags it.
+//
+// `NewsMediaOrganization` (podklasa Organization) + linki do polityk
+// redakcyjnych — sygnały E-E-A-T dla wydawcy newsowego. Kotwice wskazują
+// realne sekcje na /o-serwisie (strona transparentności); jeśli zmieniasz
+// tam `id`, zaktualizuj też te URL-e.
 const ORGANIZATION_JSON_LD = {
   "@context": "https://schema.org",
-  "@type": "Organization",
+  "@type": "NewsMediaOrganization",
   name: siteConfig.name,
   url: siteConfig.url,
   logo: `${siteConfig.url}/icon-512.png`,
   description: siteConfig.description,
+  publishingPrinciples: `${siteConfig.url}/o-serwisie#jak-powstaja-teksty`,
+  correctionsPolicy: `${siteConfig.url}/o-serwisie#zglos-blad`,
+  actionableFeedbackPolicy: `${siteConfig.url}/o-serwisie#zglos-blad`,
+  // Imienny założyciel (decyzja 2026-08-11) — ta sama encja co Person na
+  // /redakcja i author w NewsArticle. Spójność encji > liczba pól.
+  founder: {
+    "@type": "Person",
+    name: siteConfig.author.name,
+    url: `${siteConfig.url}/redakcja`,
+    sameAs: siteConfig.author.sameAs,
+  },
 } as const;
 
 export default async function RootLayout({

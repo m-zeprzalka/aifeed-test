@@ -2,7 +2,7 @@ import { cache } from "react";
 import { notFound } from "next/navigation";
 import { Thumbnail } from "@/components/ui/thumbnail";
 import Link from "next/link";
-import { Clock, ExternalLink, Calendar, ChevronLeft, ChevronRight } from "lucide-react";
+import { Clock, ExternalLink, Calendar, ChevronLeft, ChevronRight, UserRound } from "lucide-react";
 import { getArticleBySlug, getAdjacentArticles, getRelatedArticles, getSitemapArticles } from "@/lib/data";
 import { ArticleCard } from "@/components/articles/article-card";
 import { Breadcrumbs } from "@/components/articles/breadcrumbs";
@@ -119,10 +119,14 @@ export default async function ArticlePage({ params }: PageProps) {
     ...((article.updated_at || article.published_at) && {
       dateModified: article.updated_at || article.published_at,
     }),
+    // Person zamiast Organization (ROADMAP §3.2 / backlog #5.2) — imienny,
+    // weryfikowalny autor to najsilniejszy pojedynczy sygnał E-E-A-T. Encja
+    // spójna z Person JSON-LD na /redakcja i `founder` w layout.tsx.
     author: {
-      "@type": "Organization",
-      name: siteConfig.name,
-      url: siteConfig.url,
+      "@type": "Person",
+      name: siteConfig.author.name,
+      url: `${siteConfig.url}/redakcja`,
+      sameAs: siteConfig.author.sameAs,
     },
     publisher: {
       "@type": "Organization",
@@ -162,18 +166,30 @@ export default async function ArticlePage({ params }: PageProps) {
             <Breadcrumbs items={breadcrumbItems} />
           </div>
 
-          {/* Meta */}
-          <div className="mb-5 flex items-center gap-3">
-            {publishedDate && article.published_at && (
-              <time
-                dateTime={article.published_at}
-                className="flex items-center gap-1.5 text-xs font-mono tracking-wide text-muted-foreground"
-              >
-                <Calendar className="size-3" aria-hidden="true" />
-                {publishedDate}
-              </time>
-            )}
+          {/* Meta — byline linkuje do /redakcja (E-E-A-T: widoczny,
+              weryfikowalny autor serwisu; „Redakcja:" zamiast sugerowania
+              ręcznego autorstwa tekstu — proces opisany na /o-serwisie). */}
+          <div className="mb-5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            <Link
+              href="/redakcja"
+              className="flex items-center gap-1.5 text-xs font-mono tracking-wide text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <UserRound className="size-3" aria-hidden="true" />
+              Redakcja: {siteConfig.author.name}
+            </Link>
             <span className="size-0.5 rounded-full bg-muted-foreground/30" aria-hidden="true" />
+            {publishedDate && article.published_at && (
+              <>
+                <time
+                  dateTime={article.published_at}
+                  className="flex items-center gap-1.5 text-xs font-mono tracking-wide text-muted-foreground"
+                >
+                  <Calendar className="size-3" aria-hidden="true" />
+                  {publishedDate}
+                </time>
+                <span className="size-0.5 rounded-full bg-muted-foreground/30" aria-hidden="true" />
+              </>
+            )}
             <span className="flex items-center gap-1.5 text-xs font-mono tracking-wide text-muted-foreground">
               <Clock className="size-3" aria-hidden="true" />
               {article.reading_time} min czytania
@@ -245,16 +261,38 @@ export default async function ArticlePage({ params }: PageProps) {
                   const id = slugifyHeading(reactNodeText(children));
                   return <h3 id={id} {...props}>{children}</h3>;
                 },
-                a: ({ href, children, ...props }) => (
-                  <a
-                    href={href}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    {...props}
-                  >
-                    {children}
-                  </a>
-                ),
+                a: ({ href, children, ...props }) => {
+                  const url = typeof href === "string" ? href : "";
+                  // Linki wewnętrzne (kontekstowe linkowanie z pipeline'u —
+                  // sanitizeInternalLinks przepuszcza tylko /artykul/<slug>
+                  // z katalogu) zostają w tej samej karcie: <Link> zamiast
+                  // target=_blank, pełny link equity bez rel=noopener.
+                  if (url.startsWith("/")) {
+                    return (
+                      <Link href={url} {...props}>
+                        {children}
+                      </Link>
+                    );
+                  }
+                  // Kotwice w obrębie strony — bez nowej karty.
+                  if (url.startsWith("#")) {
+                    return (
+                      <a href={url} {...props}>
+                        {children}
+                      </a>
+                    );
+                  }
+                  return (
+                    <a
+                      href={href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      {...props}
+                    >
+                      {children}
+                    </a>
+                  );
+                },
               }}
             >
               {article.content}

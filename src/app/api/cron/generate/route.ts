@@ -6,6 +6,8 @@ import { assessArticleQuality } from "@/lib/ai/quality";
 import { getArticleThumbnail } from "@/lib/images/generator";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logPipelineEvent, newRunId } from "@/lib/telemetry";
+import { pingIndexNow } from "@/lib/indexnow";
+import { siteConfig } from "@/config/site";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import slugify from "slugify";
 
@@ -133,6 +135,25 @@ async function runPipeline(request: NextRequest) {
       ? popularTagRows.map((t: { name: string }) => t.name).filter(Boolean)
       : [];
 
+    // Kandydaci do linkowania wewnętrznego — 40 ostatnich opublikowanych
+    // artykułów (tytuł + slug). AI wplata 1-3 kontekstowe linki wyłącznie z
+    // tej listy; `sanitizeInternalLinks` w writer.ts usuwa wszystko spoza niej
+    // (zero halucynowanych 404). Artykuły opublikowane w TYM runie dopisujemy
+    // do listy na bieżąco — teksty z jednego cyklu newsowego często się łączą.
+    const { data: recentArticleRows } = await supabase
+      .from("articles")
+      .select("title, slug")
+      .eq("is_published", true)
+      .order("published_at", { ascending: false })
+      .limit(40);
+    const internalLinkCandidates: { title: string; slug: string }[] = (
+      recentArticleRows || []
+    ).filter((r): r is { title: string; slug: string } => Boolean(r.title && r.slug));
+
+    // URL-e opublikowane w tym runie — po pętli lecą jednym pingiem do
+    // IndexNow (fail-soft; Google nie wspiera, Bing/Copilot tak).
+    const publishedUrls: string[] = [];
+
     const QUALITY_FEATURED_THRESHOLD = 80;
     const startOfTodayUtc = new Date();
     startOfTodayUtc.setUTCHours(0, 0, 0, 0);
@@ -182,7 +203,7 @@ async function runPipeline(request: NextRequest) {
           continue;
         }
 
-        const article = await generateArticle(item.title, [item.url], [item.description], sourceContent, runId, existingTags);
+        const article = await generateArticle(item.title, [item.url], [item.description], sourceContent, runId, existingTags, internalLinkCandidates);
 
         // Validate AI response — reject refusals and garbage
         const refusalPatterns = ["nie można przetworzyć", "nie mogę", "brak treści", "brak czytelnej"];
@@ -318,6 +339,10 @@ async function runPipeline(request: NextRequest) {
         );
 
         generated.push(article.title);
+        publishedUrls.push(`${siteConfig.url}/artykul/${slug}`);
+        // Świeżo opublikowany artykuł staje się kandydatem do linkowania dla
+        // kolejnych items w tym samym runie (ten sam cykl newsowy).
+        internalLinkCandidates.unshift({ title: article.title, slug });
         console.log(`Generated: ${article.title}`);
         await logPipelineEvent(runId, "article_generated", {
           title: article.title,
@@ -342,6 +367,10 @@ async function runPipeline(request: NextRequest) {
         });
       }
     }
+
+    // IndexNow — jeden zbiorczy ping po całym runie. Fail-soft (log-only),
+    // nie liczy się do time budgetu w sposób istotny (timeout 10 s).
+    await pingIndexNow(publishedUrls);
 
     const durationMs = Date.now() - runStartedAt;
     await logPipelineEvent(runId, "run_end", {

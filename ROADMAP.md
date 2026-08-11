@@ -1,8 +1,8 @@
 # AiFeed — Roadmapa: produkcja, SEO i monetyzacja
 
-> **Status:** wersja 2.0 · 2026-08-10
+> **Status:** wersja 2.1 · 2026-08-11
 > **Zastępuje:** `AUDIT.md` (audyt z 2026-05, w całości zrealizowany lub przeniesiony tutaj)
-> **Stan serwisu:** 1340 opublikowanych artykułów, pipeline 3×4/dzień działa, kod po pełnym audycie (0 podatności npm, wszystkie znane błędy naprawione — szczegóły w git log z 2026-08-10)
+> **Stan serwisu:** 1340+ opublikowanych artykułów, pipeline 2×3/dzień (obniżony 2026-08-11), kod po pełnym audycie (0 podatności npm — git log 2026-08-10) + audycie SEO (git log 2026-08-11)
 
 To jest **kanoniczny dokument planowania**. `README.md` opisuje stan obecny (architektura, uruchomienie), ten plik opisuje przyszłość: co zrobić, w jakiej kolejności i dlaczego.
 
@@ -47,6 +47,22 @@ Pełna lista zmian w git log; tu esencja, żeby rozumieć punkt startowy.
 **Czystość:**
 - Usunięte: `/api/cron/seed` (generował artykuły ze zmyślonych tematów — ryzyko halucynacji), 11 nieużywanych komponentów UI, martwe klasy CSS, nieużywane zależności (`date-fns`, `@supabase/ssr`), stare makiety HTML, domyślne SVG Next.js, martwe funkcje w `data.ts` i typy w `database.ts`.
 
+### 1a. Uzupełnienie: audyt SEO 2026-08-11
+
+Realizacja techniczna filarów 2–4 strategii SEO (sekcja 3). W kodzie:
+
+- **Wolumen obniżony do 6/dzień** (`vercel.json`: 2 crony × `count=3`, 05:00 i 15:00 UTC) — mniejszy odcisk scaled-content, tokeny idą w jakość.
+- **Prompt — „polski kąt"**: obowiązkowa zasada nr 10 — sekcja „## Co to oznacza dla Polski" (dostępność w PL, ceny w zł jako przeliczenie ze źródła, kontekst AI Act), z twardym zakazem zmyślania; pomijana, gdy byłaby sztuczna. Do tego dywersyfikacja struktury (wariantowe nagłówki sekcji wniosków, 2–4 sekcje, zmienny rytm) — anty-sygnał „szablonowej fabryki".
+- **Linkowanie wewnętrzne (on-site link building)**: prompt dostaje 40 ostatnich artykułów (tytuł+slug), AI wplata 1–3 kontekstowe linki `[kotwica](/artykul/slug)`; nowy `sanitizeInternalLinks` (`lib/ai/internal-links.ts`, 13 testów) wycina każdy link spoza listy — zero halucynowanych 404. Artykuły z bieżącego runu dołączają do puli (ten sam cykl newsowy). Renderer markdown: linki wewnętrzne przez `<Link>` w tej samej karcie (bez `target=_blank`/`noopener`).
+- **News sitemap** (`/news-sitemap.xml`): artykuły < 48 h w formacie Google News, zgłoszona w robots.txt — formalny sygnał świeżości pod News/Discover.
+- **IndexNow**: pipeline pinguje Bing/Seznam/Yandex po każdym runie (`lib/indexnow.ts`, fail-soft; klucz z env `INDEXNOW_KEY` serwowany pod `/indexnow.txt`).
+- **Preferred Sources**: dyskretny box na home + link w stopce z deep-linkiem `google.com/preferences/source?q=aifeed.pl`.
+- **`/o-serwisie` jako strona transparentności**: sekcje „Jak powstają nasze teksty" (proces, wierność źródłu, bramka jakości), „Skąd czerpiemy informacje" (imienna lista źródeł), „Zauważyłeś błąd?" (polityka korekt + kontakt) — rekomendacja Google i wymóg AdSense.
+- **JSON-LD**: `Organization` → `NewsMediaOrganization` z `publishingPrinciples`/`correctionsPolicy`/`actionableFeedbackPolicy` wskazującymi kotwice na `/o-serwisie`.
+- Tytuły artykułów: prompt wymusza ~70 znaków i frazę kluczową na początku.
+
+**Poza kodem — nadal do zrobienia ręcznie:** teksty autorskie (3.3), wysyłka newslettera (3.4), profile społecznościowe (LinkedIn), zgłoszenie `news-sitemap.xml` w GSC. Decyzja o nazwisku podjęta 2026-08-11 (TAK) — `/redakcja` + Person JSON-LD wdrożone.
+
 ---
 
 ## 2. Wdrożenie na produkcję
@@ -69,6 +85,8 @@ Kolejność ma znaczenie. Całość to ~1 godzina pracy ręcznej.
 - [ ] Merge/push na `main` → auto-deploy. Lokalnie przed pushem: `npx tsc --noEmit && npm run lint && npm test && npm run build`.
 - [ ] `curl -sI https://www.aifeed.pl/icon-512.png` → **200** (było 404).
 - [ ] `curl -s https://www.aifeed.pl/sitemap.xml | grep -c "<loc>"` → **~1349** (było 1618 z tagami, w tym tylko 1000 artykułów).
+- [ ] `curl -s https://www.aifeed.pl/news-sitemap.xml | grep -c "<news:title>"` → liczba artykułów z ostatnich 48 h (po świeżym runie > 0).
+- [ ] Po ustawieniu `INDEXNOW_KEY`: `curl -s https://www.aifeed.pl/indexnow.txt` → zwraca klucz (bez klucza: 404 = feature wyłączony, też OK).
 - [ ] `curl -sI "https://www.aifeed.pl/kategoria/biznes?page=999"` → **404**.
 - [ ] `https://www.aifeed.pl/admin` → Basic Auth działa; po zalogowaniu dashboard.
 - [ ] Ręczny cron: `curl -X POST -H "Authorization: Bearer $CRON_SECRET" "https://www.aifeed.pl/api/cron/generate?count=1"` → sukces, artykuł z tagami z istniejącego katalogu.
@@ -97,17 +115,17 @@ Co Google toleruje, a nawet nagradza (udokumentowane cechy „ocalałych"): umia
 
 To jest jednocześnie Twój cel wizerunkowy — serwis firmowany nazwiskiem buduje markę osobistą.
 
-- [ ] **Decyzja właściciela:** czy firmujesz serwis własnym nazwiskiem? (Rekomendacja: TAK — to największy pojedynczy sygnał zaufania i fundament korzyści wizerunkowych. Anonimowy „AiFeed" nie zbuduje ani E-E-A-T, ani Twojej marki.)
-- [ ] Strona **`/redakcja`**: kim jesteś, doświadczenie, zdjęcie, linki do LinkedIn/GitHub (Person JSON-LD + `sameAs`). Autor w NewsArticle JSON-LD: `Person` zamiast `Organization` (zmiana w `artykul/[slug]/page.tsx` — 15 minut, gdy strona powstanie).
-- [ ] Rozbudowa **`/o-serwisie`**: jak wybieramy źródła, jak powstają teksty (Google wprost rekomenduje "adding information on how your content was created" — strona transparentności to co innego niż banner na artykule, którego nie chcesz), standardy korekty, jak zgłosić błąd, kontakt. To także twardy wymóg AdSense.
+- [x] ~~**Decyzja właściciela**~~ ✅ 2026-08-11: TAK — serwis firmowany nazwiskiem **Michał Zeprzałka** (zeprzalka.com); cel: marka osobista i pozycja w branży AI.
+- [x] ~~Strona **`/redakcja`**~~ ✅ 2026-08-11: bio (Digital Solutions Architect, 12+ lat), podział ról człowiek/automatyzacja, Person JSON-LD z `sameAs` (zeprzalka.com, GitHub, Facebook). Autor w NewsArticle JSON-LD: `Person` + widoczny byline „Redakcja: Michał Zeprzałka" na artykułach (celowo „Redakcja:", nie goły podpis — fikcyjne bylines to profil BNN Breaking). `founder` w NewsMediaOrganization. **Zostało:** zdjęcie + LinkedIn, gdy będziesz chciał je dodać.
+- [x] ~~Rozbudowa **`/o-serwisie`**~~ ✅ 2026-08-11: sekcje „Jak powstają nasze teksty", „Skąd czerpiemy informacje", polityka korekt z kontaktem; kotwice podpięte pod `publishingPrinciples`/`correctionsPolicy` w JSON-LD.
 - [ ] `siteConfig.links` + `Organization.sameAs`: realne profile (LinkedIn, X/GitHub) — załóż, jeśli nie istnieją.
 
 ### 3.3. Filar 2 — Information gain: przestawienie pipeline'u · *tydzień 2–6*
 
 Zasada: **mniej, ale z wartością, której nie ma w źródle.** Konkurujesz z Google AI Overviews i z oryginałem — czysta parafraza przegrywa z oboma.
 
-- [ ] **Zmniejsz wolumen**: `vercel.json` z 3×4 na 2×3 (6/dzień). Mniejsza „prędkość fabryczna" = mniejszy odcisk scaled-content; oszczędzone tokeny idą na jakość.
-- [ ] **Polski kątprompt**: rozszerz `prompts.ts` o obowiązkową sekcję „Co to znaczy dla Polski / polskiego użytkownika" (ceny w PLN, dostępność w PL, kontekst AI Act / polskich regulacji, polskie odpowiedniki narzędzi). To systemowe minimum information gain w każdym tekście.
+- [x] ~~**Zmniejsz wolumen**~~ ✅ 2026-08-11: `vercel.json` 2×3 (05:00 / 15:00 UTC).
+- [x] ~~**Polski kąt w promptcie**~~ ✅ 2026-08-11: zasada nr 10 w `prompts.ts` (sekcja „Co to oznacza dla Polski" z anty-halucynacyjnymi ogranicznikami) + dywersyfikacja struktury + linkowanie wewnętrzne (1–3 linki z listy ostatnich 40 artykułów, sanitizer w `lib/ai/internal-links.ts`).
 - [ ] **1 tekst autorski tygodniowo, pisany przez człowieka** (Ty): cotygodniowe podsumowanie „Tydzień w AI po polsku" (format newsletterowy, idealny też do dystrybucji), test narzędzia po polsku (jak radzi sobie z polszczyzną — genuinely underserved temat!), albo komentarz do wydarzenia. Podpisany nazwiskiem. To jest treść, którą linkują inni.
 - [ ] **Przegląd wsteczny**: w `/admin/artykuly` masz listę — wyłącz z indeksu (unpublish) najsłabsze teksty z przeszłości (krótkie, bliskie źródłu). Mniejszy, czystszy indeks > większy, śmieciowy. (AdSense-owy case study: odrzucony serwis przeszedł review po wycięciu słabych stron.)
 
@@ -116,11 +134,11 @@ Zasada: **mniej, ale z wartością, której nie ma w źródle.** Konkurujesz z G
 Realia 2026: AI Overviews zabrały ~40% ruchu z klasycznych wyników, ale **breaking news +103%**, a **Google Discover wysyła wydawcom tyle ruchu co wyszukiwarka**. Dla serwisu newsowego Discover > blue links.
 
 - [ ] **Discover-ready obrazy**: wymóg ≥1200 px szerokości. Dziś generator AI robi 16:9, ale scrape'owane og:image bywają mniejsze — dodaj w pipeline preferencję dużych obrazów (backlog #5.3). `max-image-preview:large` już ustawione ✅.
-- [ ] **Preferred Sources** (działa po polsku od 04.2026, użytkownicy klikają ~2× częściej): dodaj na stronie głównej / w artykułach dyskretny box „Dodaj AiFeed do ulubionych źródeł Google" z deep-linkiem (wzór: Axios, 9to5).
-- [ ] **Google News**: nie ma już aplikowania (od 03.2025 inclusion czysto algorytmiczne) — jedyna droga to E-E-A-T + jakość, czyli filary 1–2.
+- [x] ~~**Preferred Sources**~~ ✅ 2026-08-11: box na home + link w stopce (`google.com/preferences/source?q=aifeed.pl`).
+- [ ] **Google News**: nie ma już aplikowania (od 03.2025 inclusion czysto algorytmiczne) — jedyna droga to E-E-A-T + jakość, czyli filary 1–2. ✅ 2026-08-11: `/news-sitemap.xml` (artykuły < 48 h) zgłoszona w robots.txt — **dodaj ją też ręcznie w GSC**.
 - [ ] **Newsletter jako kanał własny**: masz formularz i tabelę subskrybentów — zacznij WYSYŁAĆ (cotygodniowy tekst autorski z 3.3). Wymaga: Resend/Brevo + double opt-in (backlog #5.4). Kanał odporny na algorytmy, fundament monetyzacji.
 - [ ] **Dystrybucja PL**: LinkedIn (Twój profil — wizerunek!), Wykop, ew. grupy FB o AI. 15 min dziennie.
-- [ ] **IndexNow/Bing**: darmowe, Copilot cytuje źródła — konfiguracja raz.
+- [x] ~~**IndexNow/Bing**~~ ✅ 2026-08-11 (kod): ping po każdym runie pipeline'u + `/indexnow.txt`. **Zostało ręcznie:** wygeneruj klucz (`openssl rand -hex 16`), ustaw `INDEXNOW_KEY` w Vercel → Production, zweryfikuj `curl https://www.aifeed.pl/indexnow.txt`.
 
 ### 3.5. Filar 4 — Higiena techniczna · *zrobione + monitoring*
 
@@ -196,7 +214,7 @@ Display w Polsce płaci **1–5 zł RPM** (AdSense, polski język). Zoptymalizow
 | # | Co | Trigger / termin |
 |---|---|---|
 | 5.1 | **Konsolidacja tagów w DB** — skrypt SQL scalający warianty pisowni (2567 → docelowo ~300); po nim ewentualna re-indeksacja top-50 tagów | Po ustabilizowaniu nowego promptu (miesiąc) |
-| 5.2 | **Person JSON-LD + `/redakcja`** | Po decyzji o nazwisku (filar 1 SEO) |
+| 5.2 | ~~**Person JSON-LD + `/redakcja`**~~ ✅ 2026-08-11 | ~~Po decyzji o nazwisku~~ zrobione |
 | 5.3 | **Miniatury: preferencja ≥1200 px + re-host wszystkich na Supabase Storage** (Discover + kontrola nad LCP + wąska whitelist w `next.config.ts`) | Przy pracach nad Discover |
 | 5.4 | **Newsletter: double opt-in + unsubscribe + wysyłka (Resend)** — wymaga migracji DB (`confirmation_token`, `confirmed_at`) | Przed pierwszą wysyłką (RODO) |
 | 5.5 | **Rate limit na Upstash Redis** (obecny in-memory jest per-instancję) | > 100 req/min na API albo anomalia w logach |

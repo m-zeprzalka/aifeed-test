@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project context
 
-**AiFeed** is a Polish-language, fully automated AI news magazine. A Vercel Cron (3×/day, `?count=4`) triggers a pipeline that scrapes 20 RSS feeds, scores and dedupes items, scrapes full source content, generates a Polish article via OpenRouter (Claude Sonnet 4) constrained to the existing tag vocabulary, runs a quality gate, picks a thumbnail (og:image → Gemini 2.5 Flash Image fallback), and publishes to Supabase. No human in the loop.
+**AiFeed** is a Polish-language, fully automated AI news magazine. A Vercel Cron (2×/day, `?count=3` — volume deliberately reduced from 12/day, ROADMAP §3.3) triggers a pipeline that scrapes 20 RSS feeds, scores and dedupes items, scrapes full source content, generates a Polish article via OpenRouter (Claude Sonnet 4) constrained to the existing tag vocabulary and an internal-link whitelist, runs a quality gate, picks a thumbnail (og:image → Gemini 2.5 Flash Image fallback), publishes to Supabase, and pings IndexNow. No human in the loop.
 
 Production: `https://www.aifeed.pl` (Vercel project `aifeed-pl`).
 
@@ -69,6 +69,9 @@ curl -X POST -H "Authorization: Bearer $CRON_SECRET" \
 - **Dedup query errors abort the run** (an ignored error would republish the whole batch).
 - **`extractMeta` has 3 fallback strategies** for the `---META---` JSON tail — keep all three.
 - The prompt receives `existingTags` (top-60 via `popular_tags` RPC) — the AI picks tags from the catalog, max 1 new. This is the root-cause fix for tag fragmentation; don't remove it.
+- The prompt also receives `internalLinkCandidates` (40 newest title+slug pairs; articles published mid-run are appended). **Every AI-generated internal link must survive `sanitizeInternalLinks()`** (`lib/ai/internal-links.ts`) — links outside the whitelist become plain text (no hallucinated 404s). Changes require updating `internal-links.test.ts`.
+- Prompt rule 10 ("Co to oznacza dla Polski") is the systemic information-gain minimum (ROADMAP §3.3) — don't remove; its anti-hallucination constraints are part of the rule.
+- After the loop, `pingIndexNow(publishedUrls)` (fail-soft, needs `INDEXNOW_KEY`; key served at `/indexnow.txt`).
 - Quality gate: score < 50 → reject (`src/lib/ai/quality.ts`); `is_featured` max 1/day at score ≥ 80.
 - `polishTypography` protects code blocks, markdown link destinations, and bare URLs — if you touch `splitProtectingCode`, run the typography tests.
 
@@ -81,10 +84,13 @@ curl -X POST -H "Authorization: Bearer $CRON_SECRET" \
 | `/kategoria/[slug]?page=N` | 300 s* | *dynamic (searchParams); empty page>1 → `notFound()` — keep this, it kills a soft-404 space |
 | `/tag/[slug]` | 300 s | **noindex, follow; excluded from sitemap** (thin content, ~73% of tags have 1 article). Don't re-index without ROADMAP #5.1 (catalog consolidation) |
 | `/szukaj` | — | client; noindex; NOT in robots.txt Disallow (noindex needs crawlability) |
+| `/news-sitemap.xml` | 900 s | Google News sitemap, only articles < 48 h; listed in robots.txt next to sitemap.xml |
+| `/indexnow.txt` | dynamic | IndexNow key from env (`INDEXNOW_KEY`; unset → 404) |
+| `/redakcja` | static | author page (Person JSON-LD, `siteConfig.author`); target of article bylines ("Redakcja: …" — deliberately not a plain byline) and `founder`/`author` entities |
 | `/icon-192.png` `/icon-512.png` `/apple-icon.png` | build-static | generated from `src/lib/brand-icon.tsx`; referenced by manifest + JSON-LD logos — don't delete |
 | `/admin/*` | dynamic | Basic Auth + noindex (3 layers) |
 
-API: `/api/cron/generate` (Bearer, `?count` ∈ [1,15], default 4); `/api/newsletter` (5/min/IP); `/api/search` (30/min/IP, ≤100 chars). Rate limiting is in-memory per-instance (deliberate MVP choice — upgrade trigger in ROADMAP #5.5).
+API: `/api/cron/generate` (Bearer, `?count` ∈ [1,15], default 4; crons call with 3); `/api/newsletter` (5/min/IP); `/api/search` (30/min/IP, ≤100 chars). Rate limiting is in-memory per-instance (deliberate MVP choice — upgrade trigger in ROADMAP #5.5).
 
 ### Database (Supabase)
 
@@ -104,10 +110,10 @@ API: `/api/cron/generate` (Bearer, `?count` ∈ [1,15], default 4); `/api/newsle
 
 ## Testing
 
-Tests live next to source (`src/**/*.test.{ts,tsx}`; 64 tests). `data.test.ts` imports real helpers from `search-utils.ts`; `safe-fetch.test.ts` covers the SSRF guard; typography tests cover URL protection. When you touch those areas, extend the tests — that's the contract.
+Tests live next to source (`src/**/*.test.{ts,tsx}`; 77 tests). `data.test.ts` imports real helpers from `search-utils.ts`; `safe-fetch.test.ts` covers the SSRF guard; typography tests cover URL protection; `internal-links.test.ts` covers the internal-link whitelist. When you touch those areas, extend the tests — that's the contract.
 
 ## Deployment
 
-Vercel project `aifeed-pl` (team `m-zeprzalkas-projects`), canonical domain `https://www.aifeed.pl`. Crons in `vercel.json` (05/11/17 UTC, count=4). Required env vars: see `.env.example` (complete, commented). Production rollout checklist: `ROADMAP.md` §2.
+Vercel project `aifeed-pl` (team `m-zeprzalkas-projects`), canonical domain `https://www.aifeed.pl`. Crons in `vercel.json` (05/15 UTC, count=3). Required env vars: see `.env.example` (complete, commented; `INDEXNOW_KEY` optional — Production only). Production rollout checklist: `ROADMAP.md` §2.
 
 Pre-push gate: `npx tsc --noEmit && npm run lint && npm test && npm run build` — all green, always.

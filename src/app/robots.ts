@@ -17,6 +17,9 @@ export default function robots(): MetadataRoute.Robots {
       // App Router serwuje payloady RSC na URL-u strony (`?_rsc=`).
       disallow: ["/api/", "/admin/"],
     },
-    sitemap: `${siteConfig.url}/sitemap.xml`,
+    // news-sitemap.xml: tylko artykuły < 48 h (Google News/Discover). Obie
+    // sitemapy zgłaszamy też ręcznie w GSC — wpis tutaj jest dla pozostałych
+    // crawlerów (Bing czyta robots.txt).
+    sitemap: [`${siteConfig.url}/sitemap.xml`, `${siteConfig.url}/news-sitemap.xml`],
   };
 }

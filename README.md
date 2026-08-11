@@ -10,16 +10,17 @@
 
 ## 1. Jak to działa
 
-Pipeline (Vercel Cron, 3×/dzień: 05:00 / 11:00 / 17:00 UTC, `?count=4`):
+Pipeline (Vercel Cron, 2×/dzień: 05:00 / 15:00 UTC, `?count=3` — wolumen celowo obniżony z 12/dzień do 6/dzień, ROADMAP §3.3):
 
 1. **Scrape** — 20 feedów RSS (`src/lib/scraper/sources.ts`) równolegle; filtr słów kluczowych AI z granicami słów.
 2. **Dedup** — `scraped_items.source_url` UNIQUE; każdy URL przetwarzany raz na zawsze. Błąd zapytania dedupe twardo przerywa run (ochrona przed duplikatami).
 3. **Selekcja** — scoring świeżość − kara za monokulturę źródła (`selectTopArticles`).
 4. **Pełna treść** — `scrapeArticleContent` przez `safeFetch` (hardening SSRF — patrz §7).
-5. **Generacja** — `anthropic/claude-sonnet-4` przez OpenRouter; wynik `treść\n---META---\n{json}`; trzy strategie ekstrakcji meta (LLM bywa niesforny); `normalizeMarkdown` + `polishTypography`. Prompt dostaje **katalog istniejących tagów** (wybór z listy + maks. 1 nowy — dyscyplina taksonomii). Retry ×1 na 429/5xx.
+5. **Generacja** — `anthropic/claude-sonnet-4` przez OpenRouter; wynik `treść\n---META---\n{json}`; trzy strategie ekstrakcji meta (LLM bywa niesforny); `normalizeMarkdown` + `sanitizeInternalLinks` + `polishTypography`. Prompt dostaje **katalog istniejących tagów** (wybór z listy + maks. 1 nowy — dyscyplina taksonomii) oraz **listę 40 ostatnich artykułów** (1-3 kontekstowe linki wewnętrzne; wszystko spoza listy wycina sanitizer — zero halucynowanych 404). Obowiązkowa reguła „polskiego kąta" (sekcja „Co to oznacza dla Polski", gdy temat na to pozwala) + dywersyfikacja struktury. Retry ×1 na 429/5xx.
 6. **Quality gate** — scoring 0–100 (`src/lib/ai/quality.ts`), próg **≥ 50**; wykrywanie nieprzetłumaczonych angielskich tytułów. `is_featured` maks. 1/dzień przy score ≥ 80.
 7. **Miniatura** — og:image ze źródła (przez `safeFetch`!) → fallback Gemini 2.5 Flash Image → upload do Supabase Storage.
 8. **Zapis** — INSERT artykułu → **natychmiast** oznaczenie URL jako przetworzony → tagi (równolegle). Kolejność zwęża okno duplikacji przy ścięciu funkcji.
+9. **IndexNow** — po całym runie jeden zbiorczy ping z nowymi URL-ami do Bing/Seznam/Yandex (fail-soft; wymaga `INDEXNOW_KEY`, klucz serwowany pod `/indexnow.txt`).
 
 Budżet czasowy: `maxDuration=300`, guard przerywa pętlę po 270 s — nieprzetworzone itemy wracają w następnym runie.
 
@@ -33,7 +34,7 @@ Budżet czasowy: `maxDuration=300`, guard przerywa pętlę po 270 s — nieprzet
 | Komponenty | shadcn/ui na `@base-ui/react` | NIE klasyczny Radix |
 | Dane | Supabase (Postgres + Storage) | anon key + RLS dla odczytów; service role tylko cron/newsletter/admin |
 | LLM | OpenRouter | Claude Sonnet 4 (teksty), Gemini 2.5 Flash Image (miniatury) |
-| Testy | Vitest 4 + Testing Library + jsdom | 64 testy |
+| Testy | Vitest 4 + Testing Library + jsdom | 77 testów |
 | Hosting | Vercel (projekt `aifeed-pl`) | Node 24, Fluid Compute |
 
 ## 3. Quick start
@@ -82,6 +83,10 @@ Komendy: `npm run dev` · `npm run build` · `npm run lint` (musi być 0/0) · `
 | `/tag/[slug]` | 300 s | **`noindex, follow`**, poza sitemapą (thin content — 73% tagów ma 1 artykuł) |
 | `/szukaj` | — | client; `noindex` (bez Disallow w robots — nie łączy się Disallow z noindex) |
 | `/feed.xml` | 3600 s | RSS 2.0, CDATA, atom self-link |
+| `/news-sitemap.xml` | 900 s | Google News sitemap — tylko artykuły < 48 h (starsze Google ignoruje); zgłoszona w robots.txt |
+| `/indexnow.txt` | dynamic | klucz IndexNow z env (`INDEXNOW_KEY`; brak → 404) |
+| `/o-serwisie` | static | strona transparentności: proces redakcyjny, źródła, polityka korekt (kotwice = cele `publishingPrinciples`/`correctionsPolicy` w JSON-LD) |
+| `/redakcja` | static | autor serwisu (Michał Zeprzałka) — Person JSON-LD z `sameAs`; cel bylinów z artykułów i `founder`/`author` w JSON-LD |
 | `/icon-192.png`, `/icon-512.png`, `/apple-icon.png` | build | generowane z `src/lib/brand-icon.tsx` (wpisane w manifest + JSON-LD logo) |
 | `/admin`, `/admin/artykuly` | dynamic | Basic Auth + noindex ×3 warstwy; dashboard telemetrii + zarządzanie artykułami |
 
@@ -101,7 +106,7 @@ Redirecty EN→PL (308) w `next.config.ts`. Nowe route'y zawsze po polsku.
 
 - Copy, artykuły, commity, dokumenty projektowe: **po polsku**. Identyfikatory kodu i `.env.example`: po angielsku.
 - ❌ Nie dodawać: `tailwind.config.js`, `@tailwindcss/typography` (jest własny `.prose-article`), globalnego `scroll-behavior: smooth`, drugiego listenera scrolla (użyj `useScrollY`), bannerów „AI generated" w UI artykułu, widocznego h1 na home, CategoryBar na stronie artykułu.
-- ✅ Używać zawsze: `jsonLdScript()`, `slugifyHeading()` (+`stripInlineMarkdown` — TOC i renderer muszą slugifikować identyczny tekst), `polishTypography()` (tylko pipeline; chroni kod i URL-e), `pluralize(count, forms)` (pełna polska reguła — teens!), `<time dateTime>`, `useArticleSearch()`.
+- ✅ Używać zawsze: `jsonLdScript()`, `slugifyHeading()` (+`stripInlineMarkdown` — TOC i renderer muszą slugifikować identyczny tekst), `polishTypography()` (tylko pipeline; chroni kod i URL-e), `pluralize(count, forms)` (pełna polska reguła — teens!), `<time dateTime>`, `useArticleSearch()`, `sanitizeInternalLinks()` (każda treść AI z linkami wewnętrznymi — whitelist slugów, testy w `internal-links.test.ts`).
 - Obrazy: wyłącznie przez `<Thumbnail>` — sam decyduje o optymalizacji (Supabase Storage → optymalizowane; zewnętrzne scrape'owane → `unoptimized`, bo optymalizator Vercela psuł część z nich).
 
 ## 9. Deployment

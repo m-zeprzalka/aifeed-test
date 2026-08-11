@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Thumbnail } from "@/components/ui/thumbnail";
 import { ArticleCard } from "@/components/articles/article-card";
 import { TrendingTags } from "@/components/layout/trending-tags";
+import { PreferredSourceCard } from "@/components/layout/preferred-source-card";
 import { siteConfig } from "@/config/site";
 import {
   getArticlesGroupedByCategory,
@@ -87,6 +88,11 @@ export default async function HomePage() {
           </div>
         </section>
       )}
+
+      {/* Preferred Sources (ROADMAP §3.4) — dyskretny box między hero a
+          sekcjami kategorii. Discover/Top Stories preferują źródła dodane
+          przez użytkownika. */}
+      <PreferredSourceCard />
 
       {/* Category sections — each shows the latest from a single category,
           alternating layouts for visual rhythm. */}

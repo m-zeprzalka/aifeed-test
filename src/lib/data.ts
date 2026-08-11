@@ -630,6 +630,35 @@ export async function getRelatedArticles(
 // ===================== SITEMAP HELPERS =====================
 
 /**
+ * Artykuły z ostatnich 48 h dla `/news-sitemap.xml` (Google News / Discover).
+ * Google czyta z news-sitemapy tylko wpisy młodsze niż 48 h — starsze i tak
+ * ignoruje, więc nie ma sensu ich zgłaszać. Limit 100 to margines ~16× nad
+ * realnym wolumenem (6/dzień → ~12 wpisów w oknie), grubo poniżej limitu
+ * PostgREST (1000), więc stronicowanie nie jest tu potrzebne.
+ */
+export async function getNewsSitemapArticles(): Promise<
+  { slug: string; title: string; published_at: string }[]
+> {
+  const since = new Date(Date.now() - 48 * 3600 * 1000).toISOString();
+  const { data, error } = await db()
+    .from("articles")
+    .select("slug, title, published_at")
+    .eq("is_published", true)
+    .gte("published_at", since)
+    .order("published_at", { ascending: false })
+    .limit(100);
+
+  if (error) {
+    console.error("[data] getNewsSitemapArticles failed:", error.message);
+    return [];
+  }
+  return (data || []).filter(
+    (a): a is { slug: string; title: string; published_at: string } =>
+      Boolean(a.slug && a.title && a.published_at)
+  );
+}
+
+/**
  * Per-category max(updated_at). Used by sitemap.ts so each category URL gets
  * a `lastModified` reflecting its actual content. Without this, every crawl
  * sees `new Date()` and Google wastes budget on un-changed pages.

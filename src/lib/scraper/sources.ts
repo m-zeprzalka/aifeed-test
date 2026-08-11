@@ -53,6 +53,25 @@ export const RSS_SOURCES: readonly RSSSource[] = [
     url: "https://www.artificialintelligence-news.com/feed/",
     category: "biznes",
   },
+  {
+    name: "The Register AI",
+    url: "https://www.theregister.com/software/ai_ml/headlines.atom",
+    category: "biznes",
+    // Sekcja AI/ML, ale Register miewa w niej ogólne teksty enterprise —
+    // keyword filter zostaje.
+  },
+  {
+    name: "ZDNet AI",
+    url: "https://www.zdnet.com/topic/artificial-intelligence/rss.xml",
+    category: "narzedzia",
+  },
+  {
+    name: "Simon Willison",
+    url: "https://simonwillison.net/atom/everything/",
+    category: "narzedzia",
+    // Blog osobisty (praktyczne deep-dive'y o LLM) — feed "everything"
+    // zawiera też wpisy nie-AI, keyword filter konieczny.
+  },
 
   // ===== Blogi firmowe producentów AI =====
   {
@@ -104,6 +123,12 @@ export const RSS_SOURCES: readonly RSSSource[] = [
   {
     name: "arXiv AI",
     url: "https://rss.arxiv.org/rss/cs.AI",
+    category: "badania",
+    alwaysRelevant: true,
+  },
+  {
+    name: "MIT News AI",
+    url: "https://news.mit.edu/rss/topic/artificial-intelligence2",
     category: "badania",
     alwaysRelevant: true,
   },

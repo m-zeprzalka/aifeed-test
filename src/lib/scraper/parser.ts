@@ -101,6 +101,63 @@ export async function scrapeAllFeeds(): Promise<ScrapedArticle[]> {
     });
 }
 
+// Stopwordy do porównywania tytułów (EN — feedy są głównie anglojęzyczne;
+// tokeny ≤3 znaki odpadają wcześniej, więc krótkie spójniki nie wymagają wpisu).
+const TITLE_STOPWORDS = new Set([
+  "with", "from", "that", "this", "after", "before", "over", "into", "your",
+  "will", "have", "been", "about", "their", "them", "than", "when", "what",
+  "says", "could", "would", "should", "there", "here", "more", "most", "just",
+  "amid", "against", "during", "while", "these", "those", "other", "some",
+]);
+
+/** Znaczące tokeny tytułu — podstawa porównania tematów między feedami. */
+export function titleTokens(title: string): Set<string> {
+  return new Set(
+    title
+      .toLowerCase()
+      .replace(/[^a-z0-9ąćęłńóśźż]+/gi, " ")
+      .split(/\s+/)
+      .filter((t) => t.length > 3 && !TITLE_STOPWORDS.has(t))
+  );
+}
+
+/**
+ * Znajduje w puli newsów doniesienia o TYM SAMYM wydarzeniu z INNYCH źródeł
+ * (multi-source synthesis — information gain: artykuł łączący 2-3 outlety
+ * zawiera więcej niż jakikolwiek pojedynczy oryginał; marcowy Core Update 2026
+ * uczynił information gain dominującym sygnałem jakości).
+ *
+ * Heurystyka: ≥3 wspólne znaczące tokeny tytułu (≥2, gdy tytuł bazowy jest
+ * krótki) — nazwiska/nazwy produktów współdzielone przez outlety piszące
+ * o tym samym wydarzeniu. Ten sam outlet jest pomijany (follow-upy tego
+ * samego serwisu to zwykle INNE wydarzenia z tą samą nazwą firmy).
+ */
+export function findRelatedItems(
+  item: ScrapedArticle,
+  pool: ScrapedArticle[],
+  max = 2
+): ScrapedArticle[] {
+  const base = titleTokens(item.title);
+  if (base.size === 0) return [];
+  const threshold = base.size <= 5 ? 2 : 3;
+
+  const scored: { candidate: ScrapedArticle; shared: number }[] = [];
+  for (const candidate of pool) {
+    if (candidate.url === item.url) continue;
+    if (candidate.sourceName === item.sourceName) continue;
+    let shared = 0;
+    for (const token of titleTokens(candidate.title)) {
+      if (base.has(token)) shared++;
+    }
+    if (shared >= threshold) scored.push({ candidate, shared });
+  }
+
+  return scored
+    .sort((a, b) => b.shared - a.shared)
+    .slice(0, max)
+    .map((s) => s.candidate);
+}
+
 export function selectTopArticles(articles: ScrapedArticle[], count = 10): ScrapedArticle[] {
   // Greedy selection: pick best-scoring article one at a time,
   // applying diversity penalty based on already-selected sources.

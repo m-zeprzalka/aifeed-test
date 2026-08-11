@@ -74,6 +74,15 @@ Testowy artykuł z nowego promptu wyszedł płytki (443 słowa) z tagami-ogólni
 - **Wolumen: rewizja decyzji** — 2×3 → **3×3 (9/dzień, 05/11/17 UTC)**. Uzasadnienie: właściciel chce skali poważnego serwisu; 9/dzień to wciąż -25% od starego 12/dzień, a jakość per artykuł jest teraz nieporównywalnie wyższa (information gain + Sonnet 5), więc profil scaled-content maleje mimo wyższego wolumenu.
 - **Strona główna — najnowsze zawsze na górze**: hero (1) + kolumna (4) + siatka (4) = 9 najnowszych nad sekcjami kategorii (pełny dzień publikacji widoczny od wejścia); stara rotacja per-kategoria potrafiła schować świeży artykuł. Box Preferred Sources przeniesiony na dół strony.
 
+### 1c. Information gain 2.0 — synteza źródeł i bogatsze tagi (2026-08-11, wieczór)
+
+Research: **marcowy Core Update 2026 uczynił „information gain" dominującym sygnałem** (Google wprost ocenia, ile nowej informacji wnosi strona vs already-ranking content); **lutowy Discover Update 2026** premiuje nisze z ekspertyzą nad generalistów. Wnioski wdrożone:
+
+- **Multi-source synthesis**: pipeline szuka w świeżej puli doniesień o tym samym wydarzeniu z INNYCH outletów (`findRelatedItems`, próg ≥3 wspólne tokeny tytułu, testy w `parser.test.ts`) i dokleja do promptu treść maks. 2 dodatkowych źródeł. Artykuł jest syntezą — zawiera więcej niż jakikolwiek pojedynczy oryginał (czysty information gain). Zmergowane URL-e → processed po insercie (bez duplikatów); wszystkie źródła widoczne pod artykułem i w JSON-LD.
+- **Tagi — 3 stopnie zamiast zbyt wąskiej blokady**: po pierwszej wersji (tylko top-60 + 1 nowy) artykuły kończyły z JEDNYM tagiem. Teraz: katalog top-100 w promptcie → tagi istniejące w DB przechodzą (bogactwo bez nowych bytów) → całkiem nowe: max 1. Ogólniki dalej zakazane w promptcie.
+- **+4 źródła** (zweryfikowane): The Register AI, ZDNet AI, Simon Willison (praktyczne deep-dive'y LLM), MIT News AI. Razem 24 feedy. Meta AI i Mistral — feedy nie istnieją (404), odpuszczone.
+- **Model — decyzja po dyskusji**: zostaje **Sonnet 5** ($2/$10). Arena (08.2026): czołówka to Opusy/Fable (2,5–5× droższe); testy polszczyzny wskazują Gemini 3.1 Pro i Claude jako czołówkę, przy czym nasz workload (wierna adaptacja pod ścisłym promptem) premiuje instruction-following Claude'a. Rewizja za ~tydzień na realnych artykułach; opcja na przyszłość: `anthropic/claude-opus-5` ($5/$25 — przy 9 art./dzień to wciąż ~20-25 USD/mies.) dla wybranych runów, jeśli Sonnet 5 nie domknie jakości.
+
 ---
 
 ## 2. Wdrożenie na produkcję

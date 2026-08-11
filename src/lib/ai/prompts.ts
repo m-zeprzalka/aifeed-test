@@ -92,7 +92,12 @@ ${sourceContent}
 """` : `OPIS ŹRÓDŁOWY:
 ${sourceDescriptions[0] || "brak opisu"}`}
 
-${sourceUrls.length > 1 ? `\nDODATKOWE ŹRÓDŁA:\n${sourceUrls.slice(1).map((url, i) => `- ${url}${sourceDescriptions[i + 1] ? `: ${sourceDescriptions[i + 1]}` : ""}`).join("\n")}` : ""}
+${sourceUrls.length > 1 ? `\nDODATKOWE ŹRÓDŁA (ich pełna treść jest w sekcjach "ŹRÓDŁO DODATKOWE" powyżej):\n${sourceUrls.slice(1).map((url, i) => `- ${url}${sourceDescriptions[i + 1] ? `: ${sourceDescriptions[i + 1]}` : ""}`).join("\n")}
+
+SYNTEZA WIELU ŹRÓDEŁ — masz ${sourceUrls.length} niezależne doniesienia o tym samym wydarzeniu:
+- Napisz SYNTEZĘ: połącz fakty ze WSZYSTKICH źródeł w jeden spójny artykuł. Fakty, które ma tylko jedno źródło, to Twoja przewaga — wykorzystaj je.
+- Gdy źródła się uzupełniają lub różnią, zaznacz to w tekście ("według [nazwa serwisu]...", "[serwis] dodaje, że...").
+- Link w pierwszym akapicie prowadzi do źródła głównego (pierwszego); pozostałe źródła zostaną automatycznie podlinkowane pod artykułem — nie musisz ich linkować w treści, ale możesz przywoływać ich nazwy.` : ""}
 
 WYMAGANIA STRUKTURALNE:
 1. PIERWSZY akapit: wstęp z linkiem do źródła [odpowiedni tekst](${sourceUrls[0]})

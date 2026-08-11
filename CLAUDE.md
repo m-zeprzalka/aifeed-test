@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project context
 
-**AiFeed** is a Polish-language, fully automated AI news magazine. A Vercel Cron (3×/day, `?count=3` = 9/day — owner decision, ROADMAP §1b) triggers a pipeline that scrapes 20 RSS feeds, scores and dedupes items, scrapes full source content, generates a Polish article via OpenRouter (**Claude Sonnet 5**, adaptive thinking on, target 700–1200 words) constrained to the existing tag vocabulary and an internal-link whitelist, runs a quality gate, picks a thumbnail (og:image → Gemini 2.5 Flash Image fallback), publishes to Supabase, and pings IndexNow. No human in the loop.
+**AiFeed** is a Polish-language, fully automated AI news magazine. A Vercel Cron (3×/day, `?count=3` = 9/day — owner decision, ROADMAP §1b) triggers a pipeline that scrapes 24 RSS feeds, scores and dedupes items, scrapes full source content **plus up to 2 same-story sources from other outlets** (`findRelatedItems` — multi-source synthesis for information gain), generates a Polish article via OpenRouter (**Claude Sonnet 5**, adaptive thinking on, target 700–1200 words) constrained to the existing tag vocabulary and an internal-link whitelist, runs a quality gate, picks a thumbnail (og:image → Gemini 2.5 Flash Image fallback), publishes to Supabase, and pings IndexNow. No human in the loop.
 
 Production: `https://www.aifeed.pl` (Vercel project `aifeed-pl`).
 
@@ -68,7 +68,8 @@ curl -X POST -H "Authorization: Bearer $CRON_SECRET" \
 - **Write order matters**: article INSERT → immediately mark `scraped_items` processed → then tags (parallel). This ordering shrinks the duplicate-publication window on mid-run kills. Do not reorder.
 - **Dedup query errors abort the run** (an ignored error would republish the whole batch).
 - **`extractMeta` has 3 fallback strategies** for the `---META---` JSON tail — keep all three.
-- The prompt receives `existingTags` (top-60 via `popular_tags` RPC) — the AI picks tags from the catalog, max 1 new. **Enforced in code, not just prompt**: route.ts filters `article.tags` to catalog tags + at most 1 new, max 5 total (the AI produced 3 generic junk tags per article when only the prompt asked). This is the root-cause fix for tag fragmentation; don't remove either layer.
+- The prompt receives `existingTags` (top-100 via `popular_tags` RPC). **Tag discipline enforced in code (3 tiers, route.ts)**: catalog tags pass → tags existing anywhere in the DB pass (checked by slug) → brand-new tags capped at 1; max 5 total. First version capped everything outside top-60 and articles ended up with a single tag — don't re-tighten without checking tag richness, and don't loosen the brand-new cap.
+- **Multi-source synthesis**: `findRelatedItems` (parser.ts, tested) merges up to 2 same-story sources from other outlets into the prompt; merged URLs are marked processed AFTER the article insert (same duplicate-window ordering as the main URL). Skipped short sources (<300 chars) stay unprocessed on purpose.
 - The prompt also receives `internalLinkCandidates` (40 newest title+slug pairs; articles published mid-run are appended). **Every AI-generated internal link must survive `sanitizeInternalLinks()`** (`lib/ai/internal-links.ts`) — links outside the whitelist become plain text (no hallucinated 404s). Changes require updating `internal-links.test.ts`.
 - Prompt rule 10 ("Co to oznacza dla Polski") is the systemic information-gain minimum (ROADMAP §3.3) — don't remove; its anti-hallucination constraints are part of the rule.
 - After the loop, `pingIndexNow(publishedUrls)` (fail-soft, needs `INDEXNOW_KEY`; key served at `/indexnow.txt`).

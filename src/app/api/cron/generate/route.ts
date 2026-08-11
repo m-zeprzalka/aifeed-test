@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { scrapeAllFeeds, selectTopArticles } from "@/lib/scraper/parser";
+import { scrapeAllFeeds, selectTopArticles, findRelatedItems, type ScrapedArticle } from "@/lib/scraper/parser";
 import { scrapeArticleContent } from "@/lib/scraper/content";
 import { generateArticle } from "@/lib/ai/writer";
 import { assessArticleQuality } from "@/lib/ai/quality";
@@ -130,7 +130,7 @@ async function runPipeline(request: NextRequest) {
     // Katalog popularnych tagów — raz na run, przekazywany do promptu, żeby
     // AI wybierało z istniejącej taksonomii zamiast płodzić warianty pisowni
     // (root cause rozdrobnienia katalogu: ~73% tagów z 1 artykułem).
-    const { data: popularTagRows } = await supabase.rpc("popular_tags", { tag_limit: 60 });
+    const { data: popularTagRows } = await supabase.rpc("popular_tags", { tag_limit: 100 });
     const existingTags: string[] = Array.isArray(popularTagRows)
       ? popularTagRows.map((t: { name: string }) => t.name).filter(Boolean)
       : [];
@@ -153,6 +153,10 @@ async function runPipeline(request: NextRequest) {
     // URL-e opublikowane w tym runie — po pętli lecą jednym pingiem do
     // IndexNow (fail-soft; Google nie wspiera, Bing/Copilot tak).
     const publishedUrls: string[] = [];
+
+    // URL-e już "zajęte" w tym runie (wybrane tematy + źródła dołączone do
+    // syntez) — pula kandydatów do multi-source nie może ich używać ponownie.
+    const usedSourceUrls = new Set(topItems.map((t) => t.url));
 
     const QUALITY_FEATURED_THRESHOLD = 80;
     const startOfTodayUtc = new Date();
@@ -203,7 +207,40 @@ async function runPipeline(request: NextRequest) {
           continue;
         }
 
-        const article = await generateArticle(item.title, [item.url], [item.description], sourceContent, runId, existingTags, internalLinkCandidates);
+        // ===== Multi-source synthesis (information gain) =====
+        // Szukamy w świeżej puli doniesień o TYM SAMYM wydarzeniu z innych
+        // outletów i dodajemy ich treść do promptu. Artykuł-synteza zawiera
+        // więcej niż jakiekolwiek pojedyncze źródło — to jest dokładnie
+        // "information gain", dominujący sygnał jakości po marcowym Core
+        // Update 2026. Maks. 2 dodatkowe źródła (budżet czasowy scrape'ów).
+        const sourceUrls = [item.url];
+        const sourceTitles = [item.sourceName];
+        const sourceDescriptions = [item.description];
+        const mergedItems: ScrapedArticle[] = [];
+        let combinedContent = sourceContent;
+
+        const relatedCandidates = findRelatedItems(
+          item,
+          newItems.filter((n) => !usedSourceUrls.has(n.url)),
+          2
+        );
+        for (const rel of relatedCandidates) {
+          const relContent = await scrapeArticleContent(rel.url);
+          // Za krótkie źródło dodatkowe nic nie wnosi — pomijamy bez oznaczania
+          // jako processed (może być głównym tematem w kolejnym runie).
+          if (relContent.length < 300) continue;
+          combinedContent += `\n\n===== ŹRÓDŁO DODATKOWE (${rel.sourceName}) — "${rel.title}" =====\n${relContent}`;
+          sourceUrls.push(rel.url);
+          sourceTitles.push(rel.sourceName);
+          sourceDescriptions.push(rel.description);
+          mergedItems.push(rel);
+          usedSourceUrls.add(rel.url);
+        }
+        if (mergedItems.length > 0) {
+          console.log(`[Multi-source] "${item.title}" + ${mergedItems.length} źródła: ${mergedItems.map((m) => m.sourceName).join(", ")}`);
+        }
+
+        const article = await generateArticle(item.title, sourceUrls, sourceDescriptions, combinedContent, runId, existingTags, internalLinkCandidates);
 
         // Validate AI response — reject refusals and garbage
         const refusalPatterns = ["nie można przetworzyć", "nie mogę", "brak treści", "brak czytelnej"];
@@ -244,10 +281,6 @@ async function runPipeline(request: NextRequest) {
           );
           continue;
         }
-
-        // Ensure the original source URL is always in source_urls
-        const sourceUrls = [item.url];
-        const sourceTitles = [item.sourceName];
 
         const thumbnail = await getArticleThumbnail(article.title, item.url, runId);
 
@@ -316,19 +349,53 @@ async function runPipeline(request: NextRequest) {
           { onConflict: "source_url" }
         );
 
-        // Twarde egzekwowanie dyscypliny tagów — prompt prosi, kod GWARANTUJE:
-        // tagi z katalogu (case-insensitive) przechodzą, spoza katalogu wchodzi
-        // maksymalnie JEDEN (nowa encja), łącznie max 5. Bez tego AI potrafiło
-        // dorzucić 3 ogólniki ("zarząd", "odejścia") na jeden artykuł i katalog
-        // wracał do stanu sprzed konsolidacji.
+        // Źródła dołączone do syntezy też oznaczamy jako przetworzone — ich
+        // treść JEST w opublikowanym artykule; osobny artykuł z tego samego
+        // doniesienia byłby duplikatem.
+        await Promise.all(
+          mergedItems.map((rel) =>
+            supabase.from("scraped_items").upsert(
+              {
+                source_url: rel.url,
+                title: rel.title,
+                description: rel.description,
+                source_name: rel.sourceName,
+                is_processed: true,
+              },
+              { onConflict: "source_url" }
+            )
+          )
+        );
+
+        // Dyscyplina tagów egzekwowana w kodzie (prompt tylko prosi):
+        // 1) tagi z katalogu top-100 przechodzą,
+        // 2) tagi spoza listy, ale ISTNIEJĄCE już w bazie (katalog ma ~2,5k
+        //    pozycji) — też przechodzą (bogatsze tagowanie bez tworzenia
+        //    nowych bytów; pierwsza, zbyt wąska wersja przycinała wszystko
+        //    spoza top-60 i artykuły kończyły z jednym tagiem),
+        // 3) tagi CAŁKIEM nowe — wchodzi maksymalnie JEDEN (nowa encja).
+        // Łącznie max 5.
         const catalogLower = new Set(existingTags.map((t) => t.toLowerCase()));
         const inCatalog = article.tags.filter((t) => catalogLower.has(t.toLowerCase()));
         const outOfCatalog = article.tags.filter((t) => !catalogLower.has(t.toLowerCase()));
-        const finalTags = [...inCatalog, ...outOfCatalog.slice(0, 1)].slice(0, 5);
-        if (outOfCatalog.length > 1) {
-          console.warn(
-            `[Tags] Wycięto ${outOfCatalog.length - 1} tagów spoza katalogu: ${outOfCatalog.slice(1).join(", ")}`
-          );
+        let knownInDb: string[] = [];
+        let brandNew: string[] = [];
+        if (outOfCatalog.length > 0) {
+          const bySlug = outOfCatalog.map((name) => ({
+            name,
+            slug: slugify(name, { lower: true, strict: true, locale: "pl" }),
+          }));
+          const { data: existingTagRows } = await supabase
+            .from("tags")
+            .select("slug")
+            .in("slug", bySlug.map((b) => b.slug));
+          const existingSlugs = new Set((existingTagRows || []).map((r: { slug: string }) => r.slug));
+          knownInDb = bySlug.filter((b) => existingSlugs.has(b.slug)).map((b) => b.name);
+          brandNew = bySlug.filter((b) => !existingSlugs.has(b.slug)).map((b) => b.name);
+        }
+        const finalTags = [...inCatalog, ...knownInDb, ...brandNew.slice(0, 1)].slice(0, 5);
+        if (brandNew.length > 1) {
+          console.warn(`[Tags] Wycięto ${brandNew.length - 1} nowych tagów: ${brandNew.slice(1).join(", ")}`);
         }
 
         // Handle tags — upserts are independent per tag, run them in parallel.
@@ -366,6 +433,7 @@ async function runPipeline(request: NextRequest) {
           source_name: item.sourceName,
           category: article.category,
           quality_score: quality.score,
+          merged_sources: mergedItems.length,
           is_featured: shouldFeature,
           thumbnail_source: thumbnail.source ?? (thumbnail.url ? "ai-generated" : "none"),
           word_count: article.content.split(/\s+/).filter(Boolean).length,

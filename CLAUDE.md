@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project context
 
-**AiFeed** is a Polish-language, fully automated AI news magazine. A Vercel Cron (2×/day, `?count=3` — volume deliberately reduced from 12/day, ROADMAP §3.3) triggers a pipeline that scrapes 20 RSS feeds, scores and dedupes items, scrapes full source content, generates a Polish article via OpenRouter (Claude Sonnet 4) constrained to the existing tag vocabulary and an internal-link whitelist, runs a quality gate, picks a thumbnail (og:image → Gemini 2.5 Flash Image fallback), publishes to Supabase, and pings IndexNow. No human in the loop.
+**AiFeed** is a Polish-language, fully automated AI news magazine. A Vercel Cron (3×/day, `?count=3` = 9/day — owner decision, ROADMAP §1b) triggers a pipeline that scrapes 20 RSS feeds, scores and dedupes items, scrapes full source content, generates a Polish article via OpenRouter (**Claude Sonnet 5**, adaptive thinking on, target 700–1200 words) constrained to the existing tag vocabulary and an internal-link whitelist, runs a quality gate, picks a thumbnail (og:image → Gemini 2.5 Flash Image fallback), publishes to Supabase, and pings IndexNow. No human in the loop.
 
 Production: `https://www.aifeed.pl` (Vercel project `aifeed-pl`).
 
@@ -42,7 +42,7 @@ curl -X POST -H "Authorization: Bearer $CRON_SECRET" \
 - **Tailwind CSS 4** — configured in `globals.css` (`@theme`, `@custom-variant`, `@utility`); **no `tailwind.config.js`**
 - **shadcn/ui on `@base-ui/react`** (not classic Radix); `shadcn` CLI lives in devDependencies
 - **Supabase** (`@supabase/supabase-js` only) — anon key + RLS for reads; service role only in cron route, newsletter POST, and admin Server Actions
-- **OpenRouter**: `anthropic/claude-sonnet-4` (articles), `google/gemini-2.5-flash-image` (thumbnails)
+- **OpenRouter**: `anthropic/claude-sonnet-5` (articles — do NOT downgrade to sonnet-4, it's deprecated and pricier; `max_tokens: 12000` accommodates default-on adaptive thinking), `google/gemini-2.5-flash-image` (thumbnails)
 - **Vitest 4** + Testing Library + jsdom · **Node 24.x** on Vercel
 
 ## Architecture — the load-bearing pieces
@@ -68,7 +68,7 @@ curl -X POST -H "Authorization: Bearer $CRON_SECRET" \
 - **Write order matters**: article INSERT → immediately mark `scraped_items` processed → then tags (parallel). This ordering shrinks the duplicate-publication window on mid-run kills. Do not reorder.
 - **Dedup query errors abort the run** (an ignored error would republish the whole batch).
 - **`extractMeta` has 3 fallback strategies** for the `---META---` JSON tail — keep all three.
-- The prompt receives `existingTags` (top-60 via `popular_tags` RPC) — the AI picks tags from the catalog, max 1 new. This is the root-cause fix for tag fragmentation; don't remove it.
+- The prompt receives `existingTags` (top-60 via `popular_tags` RPC) — the AI picks tags from the catalog, max 1 new. **Enforced in code, not just prompt**: route.ts filters `article.tags` to catalog tags + at most 1 new, max 5 total (the AI produced 3 generic junk tags per article when only the prompt asked). This is the root-cause fix for tag fragmentation; don't remove either layer.
 - The prompt also receives `internalLinkCandidates` (40 newest title+slug pairs; articles published mid-run are appended). **Every AI-generated internal link must survive `sanitizeInternalLinks()`** (`lib/ai/internal-links.ts`) — links outside the whitelist become plain text (no hallucinated 404s). Changes require updating `internal-links.test.ts`.
 - Prompt rule 10 ("Co to oznacza dla Polski") is the systemic information-gain minimum (ROADMAP §3.3) — don't remove; its anti-hallucination constraints are part of the rule.
 - After the loop, `pingIndexNow(publishedUrls)` (fail-soft, needs `INDEXNOW_KEY`; key served at `/indexnow.txt`).
@@ -79,7 +79,7 @@ curl -X POST -H "Authorization: Bearer $CRON_SECRET" \
 
 | Route | Revalidate | Notes |
 |---|---|---|
-| `/` (`(home)` group) | 300 s | per-category queries; sr-only h1 (owner decision) |
+| `/` (`(home)` group) | 300 s | **newest-first top**: 9 latest (hero+column+grid) above category sections, no duplicates; Preferred Sources box at the bottom (owner decisions); sr-only h1 (owner decision) |
 | `/artykul/[slug]` | 60 s | prerenders top 500; NewsArticle JSON-LD; TOC anchors via shared `slugifyHeading` + `stripInlineMarkdown` |
 | `/kategoria/[slug]?page=N` | 300 s* | *dynamic (searchParams); empty page>1 → `notFound()` — keep this, it kills a soft-404 space |
 | `/tag/[slug]` | 300 s | **noindex, follow; excluded from sitemap** (thin content, ~73% of tags have 1 article). Don't re-index without ROADMAP #5.1 (catalog consolidation) |
@@ -114,6 +114,6 @@ Tests live next to source (`src/**/*.test.{ts,tsx}`; 77 tests). `data.test.ts` i
 
 ## Deployment
 
-Vercel project `aifeed-pl` (team `m-zeprzalkas-projects`), canonical domain `https://www.aifeed.pl`. Crons in `vercel.json` (05/15 UTC, count=3). Required env vars: see `.env.example` (complete, commented; `INDEXNOW_KEY` optional — Production only). Production rollout checklist: `ROADMAP.md` §2.
+Vercel project `aifeed-pl` (team `m-zeprzalkas-projects`), canonical domain `https://www.aifeed.pl`. Crons in `vercel.json` (05/11/17 UTC, count=3). **Deploy flow: `git push` (GitHub `m-zeprzalka/aifeed-test`) does NOT auto-deploy — the Vercel project has no Git integration (deliberate; migration to a Vercel PRO account is planned). Always follow a push with `npx vercel deploy --prod --yes`.** Required env vars: see `.env.example` (complete, commented; `INDEXNOW_KEY` optional — Production only). Production rollout checklist: `ROADMAP.md` §2.
 
 Pre-push gate: `npx tsc --noEmit && npm run lint && npm test && npm run build` — all green, always.

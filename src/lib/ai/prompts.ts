@@ -15,7 +15,7 @@ ABSOLUTNE ZASADY — ZŁAMANIE KTÓREJKOLWIEK DYSKWALIFIKUJE ARTYKUŁ:
 2. ZAKAZ HALUCYNACJI: NIGDY nie dodawaj informacji, faktów, dat, liczb ani cytatów, których nie ma w dostarczonym tekście. Lepiej krótszy artykuł niż zmyślony.
 3. FAKTY I DANE: Wszystkie liczby, daty, nazwy firm/osób, cytaty MUSZĄ pochodzić bezpośrednio ze źródła. Nie zaokrąglaj, nie uogólniaj, nie "dopowiadaj".
 4. JĘZYK: Polski, profesjonalny ton dziennikarski (styl BBC News / MIT Technology Review). Jeśli źródło jest po polsku — zaadaptuj, nie tłumacz. **TYTUŁ I CAŁA TREŚĆ MUSZĄ być po polsku — ZAWSZE.** Nawet gdy źródło ma chwytliwy angielski headline ("Jury selection in Musk v. Altman", "Canva apologizes…", "People don't like him") — przetłumacz/zaadaptuj na polski. ZAKAZ pozostawiania angielskich nagłówków, cytatów-jako-tytuł czy fraz w tytule. Polskie nazwy własne (firm, modeli, produktów) zostawiamy w oryginale (OpenAI, GPT-5, Claude, Anthropic) — ale zdanie wokół nich musi być po polsku.
-5. DŁUGOŚĆ: 600–1200 słów — proporcjonalnie do objętości źródła. Nie rozciągaj sztucznie krótkiego materiału.
+5. DŁUGOŚĆ I GŁĘBIA: docelowo 700–1200 słów, gdy źródło na to pozwala; przy krótkim źródle minimum ~450 słów rzetelnej treści. Nie rozciągaj sztucznie — ale też NIE spłycaj bogatego źródła: wykorzystaj wszystkie istotne fakty, liczby, cytaty i kontekst, które źródło zawiera. Płytki, 400-słowny skrót bogatego materiału to zmarnowany artykuł — konkurujesz z oryginałem i z AI Overviews, wygrywasz tylko kompletnością i wartością dodaną.
 6. MARKDOWN: ## dla sekcji, **pogrubienia**, listy, > cytaty. NIE używaj nagłówka # (h1) — tytuł generowany osobno.
    FORMAT LIST — KAŻDY punkt w nowej linii, każdy zaczyna się od "- ", przed listą i po liście pusta linia. Przykład poprawny:
    \`\`\`
@@ -37,7 +37,10 @@ ${CATEGORY_STYLE_GUIDE}
 OBOWIĄZKOWA STRUKTURA ARTYKUŁU:
 1. Wstęp z linkiem do źródła (1-2 akapity) — zwięzłe wprowadzenie, najważniejsza informacja first
 2. Sekcja ## z 3-5 bullet points zawierającymi esencję artykułu. Nagłówek wybierz spośród: "Kluczowe wnioski", "Najważniejsze informacje", "Kluczowe informacje", "Główne wnioski" — wariuj między artykułami.
-3. Rozwinięcie w 2-4 sekcjach ## — nagłówki treściowe, specyficzne dla tematu (NIE generyczne "Rozwinięcie", "Szczegóły")
+3. Rozwinięcie w 3-4 sekcjach ## — nagłówki treściowe, specyficzne dla tematu (NIE generyczne "Rozwinięcie", "Szczegóły"). W rozwinięciu OBOWIĄZKOWO pokryj (o ile źródło na to pozwala):
+   - TŁO/KONTEKST: co doprowadziło do wydarzenia, wcześniejsze fakty przywołane w źródle
+   - KONKRET: liczby, daty, nazwiska, cytaty ze źródła — wszystkie istotne, nie wybiórczo
+   - ZNACZENIE: co z tego wynika dla branży/użytkowników — wyłącznie wnioski wyprowadzalne ze źródła
 4. Jeśli temat na to pozwala: sekcja "## Co to oznacza dla Polski" (zasada 10)
 5. Krótkie podsumowanie (1-2 zdania)
 
@@ -128,10 +131,11 @@ EXCERPT — ZASADY SEO:
 - Informuje o wartości artykułu, nie jest ogólnikowy
 - KAŻDY excerpt MUSI być unikalny i specyficzny dla tego artykułu
 
-TAGI — DYSCYPLINA KATALOGU:
-- 3-5 tagów po polsku (nazwy własne w oryginale: "OpenAI", "GPT-5").${existingTags.length > 0 ? `
-- Wybieraj PRZEDE WSZYSTKIM z listy istniejących tagów poniżej — używaj DOKŁADNIE tej pisowni.
-- Maksymalnie JEDEN tag spoza listy, wyłącznie gdy żaden istniejący nie opisuje tematu.
+TAGI — DYSCYPLINA KATALOGU (pipeline i tak wytnie nadmiarowe):
+- 3-5 tagów. Tag = ENCJA (firma, model, produkt, osoba: "OpenAI", "GPT-5", "Claude") albo ustalony temat z listy poniżej.
+- ZAKAZ tagów-ogólników, które mogłyby opisywać dowolny artykuł: "zarząd", "odejścia", "zmiany", "technologia", "innowacje", "rozwój" itp. Taki tag to śmieć w katalogu.${existingTags.length > 0 ? `
+- Wybieraj Z LISTY istniejących tagów poniżej — używaj DOKŁADNIE tej pisowni.
+- Maksymalnie JEDEN tag spoza listy i wyłącznie, gdy artykuł wprowadza nową ISTOTNĄ encję (premiera nowego modelu/produktu/firmy), której lista nie zna.
 
 ISTNIEJĄCE TAGI: ${existingTags.join(", ")}` : ""}`;
 };

@@ -6,6 +6,7 @@ import { TrendingTags } from "@/components/layout/trending-tags";
 import { PreferredSourceCard } from "@/components/layout/preferred-source-card";
 import { siteConfig } from "@/config/site";
 import {
+  getArticles,
   getArticlesGroupedByCategory,
   getPopularTags,
 } from "@/lib/data";
@@ -24,32 +25,35 @@ export const revalidate = 300;
 // plus the per-category section below (up to 4) without re-querying.
 const PER_CATEGORY = 6;
 
+// How many of the newest articles get guaranteed above-the-fold placement.
+// 9 = a full publishing day at the 3×3 cron cadence, so nothing published
+// today can "sink" below the category sections (decyzja właściciela:
+// najnowsze zawsze na górze — stara rotacja per-kategoria potrafiła schować
+// świeży artykuł w połowie strony).
+const LATEST_COUNT = 9;
+
 export default async function HomePage() {
   const allCategories = siteConfig.categories;
   const categorySlugs = allCategories.map((c) => c.slug);
 
-  const [categoryArticles, trendingTags] = await Promise.all([
+  const [latest, categoryArticles, trendingTags] = await Promise.all([
+    getArticles(LATEST_COUNT),
     getArticlesGroupedByCategory(categorySlugs, PER_CATEGORY),
     getPopularTags(10),
   ]);
 
-  // Hero = the latest article from each of the first 5 categories. The 6th
-  // category surfaces in its own dedicated section below to avoid duplication.
-  const heroPicks = allCategories
-    .slice(0, 5)
-    .map((cat) => (categoryArticles[cat.slug] || [])[0])
-    .filter((a): a is NonNullable<typeof a> => Boolean(a));
+  // Top of page = strictly newest-first: hero (1) + side column (4) + grid (4).
+  const hero = latest[0];
+  const sideFeatures = latest.slice(1, 5);
+  const freshGrid = latest.slice(5, LATEST_COUNT);
+  const latestIds = new Set(latest.map((a) => a.id));
 
-  const hero = heroPicks[0];
-  const sideFeatures = heroPicks.slice(1, 5);
-  const heroIds = new Set(heroPicks.map((a) => a.id));
-
-  // Each section excludes whatever already appears in the hero, so a reader
+  // Category sections exclude everything already shown above, so a reader
   // never sees the same article twice on the home page.
   const categoryEntries = allCategories
     .map((cat) => ({
       ...cat,
-      articles: (categoryArticles[cat.slug] || []).filter((a) => !heroIds.has(a.id)),
+      articles: (categoryArticles[cat.slug] || []).filter((a) => !latestIds.has(a.id)),
     }))
     .filter((cat) => cat.articles.length > 0);
 
@@ -89,10 +93,49 @@ export default async function HomePage() {
         </section>
       )}
 
-      {/* Preferred Sources (ROADMAP §3.4) — dyskretny box między hero a
-          sekcjami kategorii. Discover/Top Stories preferują źródła dodane
-          przez użytkownika. */}
-      <PreferredSourceCard />
+      {/* Fresh grid — pozycje 6-9 z najnowszych. Razem z hero gwarantuje, że
+          pełny dzień publikacji (9 artykułów) jest widoczny nad sekcjami
+          kategorii. */}
+      {freshGrid.length > 0 && (
+        <section aria-label="Najnowsze artykuły" className="mx-auto max-w-7xl px-4 pt-4 pb-2 sm:px-6 lg:px-8">
+          <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+            {freshGrid.map((article) => (
+              <Link
+                key={article.id}
+                href={`/artykul/${article.slug}`}
+                className="group flex flex-col overflow-hidden rounded-xl border border-border/60 bg-card card-hover"
+              >
+                <div className="relative aspect-[16/10] overflow-hidden bg-muted">
+                  {article.thumbnail_url ? (
+                    <Thumbnail
+                      src={article.thumbnail_url}
+                      alt={article.title}
+                      fill
+                      className="object-cover transition-transform duration-700 ease-out group-hover:scale-[1.03]"
+                      sizes="(max-width: 768px) 50vw, 25vw"
+                    />
+                  ) : (
+                    <div className="h-full w-full bg-gradient-to-br from-muted to-muted/50" />
+                  )}
+                </div>
+                <div className="p-3">
+                  <h3 className="text-sm font-bold leading-snug line-clamp-2 group-hover:text-primary transition-colors duration-300">
+                    {article.title}
+                  </h3>
+                  {article.published_at && (
+                    <time
+                      dateTime={article.published_at}
+                      className="mt-2 text-xs font-mono text-muted-foreground block"
+                    >
+                      {new Date(article.published_at).toLocaleDateString("pl-PL", { day: "numeric", month: "long" })}
+                    </time>
+                  )}
+                </div>
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Category sections — each shows the latest from a single category,
           alternating layouts for visual rhythm. */}
@@ -195,6 +238,12 @@ export default async function HomePage() {
           </section>
         );
       })}
+
+      {/* Preferred Sources (ROADMAP §3.4) — dyskretny box na dole strony
+          (decyzja właściciela: priorytet ma treść i ruch organiczny). */}
+      <div className="pb-8">
+        <PreferredSourceCard />
+      </div>
 
       {/* JSON-LD. Bez `SearchAction` — Google wycofał sitelinks searchbox
           (2024), a nasz /szukaj jest noindex; blok był martwym sygnałem. */}

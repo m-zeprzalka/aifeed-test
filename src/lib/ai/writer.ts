@@ -4,7 +4,12 @@ import { polishTypography } from "../typography";
 import { logPipelineEvent } from "@/lib/telemetry";
 
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
-const ARTICLE_MODEL = "anthropic/claude-sonnet-4";
+// Sonnet 5 (2026): jakość pisania klasy dawnego Opusa przy cenie NIŻSZEJ niż
+// stary Sonnet 4 ($2/$10 vs $3/$15 za MTok na OpenRouter). Adaptive thinking
+// jest domyślnie WŁĄCZONE — nie wysyłamy parametru `thinking`; max_tokens
+// musi mieścić thinking + treść (stąd 12k, nie 4k). Sonnet 4 jest deprecated
+// (first-party retirement 06.2026) — nie wracać.
+const ARTICLE_MODEL = "anthropic/claude-sonnet-5";
 
 /**
  * Repair common markdown formatting failures from the LLM before storage.
@@ -166,7 +171,9 @@ export async function generateArticle(
 
   const requestBody = JSON.stringify({
     model: ARTICLE_MODEL,
-    max_tokens: 4096,
+    // Thinking (domyślnie aktywne na Sonnet 5) liczy się do max_tokens razem
+    // z treścią — 12k daje zapas na ~1200 słów artykułu + rozumowanie.
+    max_tokens: 12000,
     // Bez tego OpenRouter często nie zwraca `usage.total_cost` i telemetria
     // kosztów w /admin loguje undefined.
     usage: { include: true },
@@ -197,7 +204,9 @@ export async function generateArticle(
           "X-Title": "AiFeed",
         },
         body: requestBody,
-        signal: AbortSignal.timeout(90_000), // 90s timeout per article
+        // 120s — Sonnet 5 z adaptive thinking potrafi myśleć kilkanaście-
+        // -kilkadziesiąt sekund przed pisaniem; 90s bywało na styk.
+        signal: AbortSignal.timeout(120_000),
       });
       const transient = response.status === 429 || response.status >= 500;
       if (!transient || attempt === 1) break;

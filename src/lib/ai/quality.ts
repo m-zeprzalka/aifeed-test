@@ -32,7 +32,10 @@ export function assessArticleQuality(article: GeneratedArticle): QualityResult {
     issues.push("brak linku do źródła");
   }
 
-  // Word count — <100 słów to twarda kara (-35), 100-199 miękka (-20)
+  // Word count — <100 słów to twarda kara (-35), 100-199 miękka (-20),
+  // 200-379 lekka (-10): przy targecie 700-1200 słów (prompt, Sonnet 5)
+  // artykuł poniżej ~380 słów to sygnał spłyconego źródła. Lekka kara nie
+  // odrzuca sama z siebie (próg 50) — legalnie krótkie newsy przechodzą.
   const wordCount = article.content.split(/\s+/).length;
   if (wordCount < 100) {
     score -= 35;
@@ -40,6 +43,9 @@ export function assessArticleQuality(article: GeneratedArticle): QualityResult {
   } else if (wordCount < 200) {
     score -= 20;
     issues.push(`krótki: ${wordCount} słów`);
+  } else if (wordCount < 380) {
+    score -= 10;
+    issues.push(`płytki: ${wordCount} słów`);
   }
 
   // At least one ## heading (structural requirement)

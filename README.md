@@ -10,13 +10,13 @@
 
 ## 1. Jak to działa
 
-Pipeline (Vercel Cron, 2×/dzień: 05:00 / 15:00 UTC, `?count=3` — wolumen celowo obniżony z 12/dzień do 6/dzień, ROADMAP §3.3):
+Pipeline (Vercel Cron, 3×/dzień: 05:00 / 11:00 / 17:00 UTC, `?count=3` = 9 artykułów/dzień — kompromis między skalą serwisu a profilem anty-slop; jakość na artykuł podniesiona przez Sonnet 5 + głębszy prompt, ROADMAP §3.3):
 
 1. **Scrape** — 20 feedów RSS (`src/lib/scraper/sources.ts`) równolegle; filtr słów kluczowych AI z granicami słów.
 2. **Dedup** — `scraped_items.source_url` UNIQUE; każdy URL przetwarzany raz na zawsze. Błąd zapytania dedupe twardo przerywa run (ochrona przed duplikatami).
 3. **Selekcja** — scoring świeżość − kara za monokulturę źródła (`selectTopArticles`).
 4. **Pełna treść** — `scrapeArticleContent` przez `safeFetch` (hardening SSRF — patrz §7).
-5. **Generacja** — `anthropic/claude-sonnet-4` przez OpenRouter; wynik `treść\n---META---\n{json}`; trzy strategie ekstrakcji meta (LLM bywa niesforny); `normalizeMarkdown` + `sanitizeInternalLinks` + `polishTypography`. Prompt dostaje **katalog istniejących tagów** (wybór z listy + maks. 1 nowy — dyscyplina taksonomii) oraz **listę 40 ostatnich artykułów** (1-3 kontekstowe linki wewnętrzne; wszystko spoza listy wycina sanitizer — zero halucynowanych 404). Obowiązkowa reguła „polskiego kąta" (sekcja „Co to oznacza dla Polski", gdy temat na to pozwala) + dywersyfikacja struktury. Retry ×1 na 429/5xx.
+5. **Generacja** — `anthropic/claude-sonnet-5` przez OpenRouter (adaptive thinking domyślnie ON; `max_tokens: 12000` mieści thinking + treść; taniej niż stary Sonnet 4: $2/$10 vs $3/$15 MTok); wynik `treść\n---META---\n{json}`; trzy strategie ekstrakcji meta; `normalizeMarkdown` + `sanitizeInternalLinks` + `polishTypography`. Prompt: target **700–1200 słów** z obowiązkowym tłem/konkretem/znaczeniem, katalog istniejących tagów, lista 40 ostatnich artykułów (1-3 kontekstowe linki wewnętrzne, sanitizer wycina resztę), „polski kąt", dywersyfikacja struktury. **Dyscyplina tagów egzekwowana też w kodzie**: max 1 tag spoza katalogu, łącznie max 5 (route.ts). Retry ×1 na 429/5xx.
 6. **Quality gate** — scoring 0–100 (`src/lib/ai/quality.ts`), próg **≥ 50**; wykrywanie nieprzetłumaczonych angielskich tytułów. `is_featured` maks. 1/dzień przy score ≥ 80.
 7. **Miniatura** — og:image ze źródła (przez `safeFetch`!) → fallback Gemini 2.5 Flash Image → upload do Supabase Storage.
 8. **Zapis** — INSERT artykułu → **natychmiast** oznaczenie URL jako przetworzony → tagi (równolegle). Kolejność zwęża okno duplikacji przy ścięciu funkcji.
@@ -33,7 +33,7 @@ Budżet czasowy: `maxDuration=300`, guard przerywa pętlę po 270 s — nieprzet
 | CSS | Tailwind **4** | konfiguracja w `globals.css` — **bez** `tailwind.config.js` |
 | Komponenty | shadcn/ui na `@base-ui/react` | NIE klasyczny Radix |
 | Dane | Supabase (Postgres + Storage) | anon key + RLS dla odczytów; service role tylko cron/newsletter/admin |
-| LLM | OpenRouter | Claude Sonnet 4 (teksty), Gemini 2.5 Flash Image (miniatury) |
+| LLM | OpenRouter | Claude Sonnet 5 (teksty), Gemini 2.5 Flash Image (miniatury) |
 | Testy | Vitest 4 + Testing Library + jsdom | 77 testów |
 | Hosting | Vercel (projekt `aifeed-pl`) | Node 24, Fluid Compute |
 
@@ -77,7 +77,7 @@ Komendy: `npm run dev` · `npm run build` · `npm run lint` (musi być 0/0) · `
 
 | Ścieżka | Revalidate | Uwagi |
 |---|---|---|
-| `/` | 300 s | hero + sekcje kategorii (per-kategoria zapytania) + `sr-only` h1 |
+| `/` | 300 s | **najnowsze zawsze na górze**: hero (1) + kolumna (4) + siatka (4) = 9 najnowszych (pełny dzień publikacji), niżej sekcje kategorii bez duplikatów, box Preferred Sources na dole; `sr-only` h1 |
 | `/artykul/[slug]` | 60 s | prerender top 500; TOC (wspólny `slugifyHeading` + `stripInlineMarkdown`), NewsArticle JSON-LD, prev/next, related |
 | `/kategoria/[slug]?page=N` | 300 s* | *dynamiczna przez `searchParams`; pusta strona > 1 → **404**; canonical per strona |
 | `/tag/[slug]` | 300 s | **`noindex, follow`**, poza sitemapą (thin content — 73% tagów ma 1 artykuł) |

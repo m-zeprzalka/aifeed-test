@@ -316,9 +316,24 @@ async function runPipeline(request: NextRequest) {
           { onConflict: "source_url" }
         );
 
+        // Twarde egzekwowanie dyscypliny tagów — prompt prosi, kod GWARANTUJE:
+        // tagi z katalogu (case-insensitive) przechodzą, spoza katalogu wchodzi
+        // maksymalnie JEDEN (nowa encja), łącznie max 5. Bez tego AI potrafiło
+        // dorzucić 3 ogólniki ("zarząd", "odejścia") na jeden artykuł i katalog
+        // wracał do stanu sprzed konsolidacji.
+        const catalogLower = new Set(existingTags.map((t) => t.toLowerCase()));
+        const inCatalog = article.tags.filter((t) => catalogLower.has(t.toLowerCase()));
+        const outOfCatalog = article.tags.filter((t) => !catalogLower.has(t.toLowerCase()));
+        const finalTags = [...inCatalog, ...outOfCatalog.slice(0, 1)].slice(0, 5);
+        if (outOfCatalog.length > 1) {
+          console.warn(
+            `[Tags] Wycięto ${outOfCatalog.length - 1} tagów spoza katalogu: ${outOfCatalog.slice(1).join(", ")}`
+          );
+        }
+
         // Handle tags — upserts are independent per tag, run them in parallel.
         await Promise.all(
-          article.tags.map(async (tagName) => {
+          finalTags.map(async (tagName) => {
             const tagSlug = slugify(tagName, { lower: true, strict: true, locale: "pl" });
 
             const { data: tag } = await supabase

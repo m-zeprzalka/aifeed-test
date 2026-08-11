@@ -1,8 +1,8 @@
 # AiFeed — Roadmapa: produkcja, SEO i monetyzacja
 
-> **Status:** wersja 2.1 · 2026-08-11
+> **Status:** wersja 2.2 · 2026-08-11
 > **Zastępuje:** `AUDIT.md` (audyt z 2026-05, w całości zrealizowany lub przeniesiony tutaj)
-> **Stan serwisu:** 1340+ opublikowanych artykułów, pipeline 2×3/dzień (obniżony 2026-08-11), kod po pełnym audycie (0 podatności npm — git log 2026-08-10) + audycie SEO (git log 2026-08-11)
+> **Stan serwisu:** 1340+ opublikowanych artykułów, pipeline 3×3/dzień na Claude Sonnet 5, kod po pełnym audycie (0 podatności npm — git log 2026-08-10) + audycie SEO i pakiecie jakościowym (git log 2026-08-11)
 
 To jest **kanoniczny dokument planowania**. `README.md` opisuje stan obecny (architektura, uruchomienie), ten plik opisuje przyszłość: co zrobić, w jakiej kolejności i dlaczego.
 
@@ -61,7 +61,18 @@ Realizacja techniczna filarów 2–4 strategii SEO (sekcja 3). W kodzie:
 - **JSON-LD**: `Organization` → `NewsMediaOrganization` z `publishingPrinciples`/`correctionsPolicy`/`actionableFeedbackPolicy` wskazującymi kotwice na `/o-serwisie`.
 - Tytuły artykułów: prompt wymusza ~70 znaków i frazę kluczową na początku.
 
-**Poza kodem — nadal do zrobienia ręcznie:** teksty autorskie (3.3), wysyłka newslettera (3.4), profile społecznościowe (LinkedIn), zgłoszenie `news-sitemap.xml` w GSC. Decyzja o nazwisku podjęta 2026-08-11 (TAK) — `/redakcja` + Person JSON-LD wdrożone.
+**Poza kodem — nadal do zrobienia ręcznie:** teksty autorskie (3.3), wysyłka newslettera (3.4), profile społecznościowe (LinkedIn), zgłoszenie `news-sitemap.xml` **i głównej `sitemap.xml`** w GSC. Decyzja o nazwisku podjęta 2026-08-11 (TAK, na poziomie serwisu) — `/redakcja` + Person JSON-LD wdrożone.
+
+### 1b. Pakiet jakościowy 2026-08-11 (po testach pierwszego artykułu)
+
+Testowy artykuł z nowego promptu wyszedł płytki (443 słowa) z tagami-ogólnikami — właściciel słusznie zakwestionował jakość. Odpowiedź:
+
+- **Model: `claude-sonnet-4` → `claude-sonnet-5`** (OpenRouter). Jakość pisania klasy dawnego Opusa, adaptive thinking domyślnie ON, a cena NIŻSZA ($2/$10 vs $3/$15 za MTok). `max_tokens` 4096→12000 (thinking + treść), timeout 90→120 s. Stary Sonnet 4 był deprecated od 06.2026.
+- **Prompt — głębia**: target 700–1200 słów (bogate źródło), obowiązkowe TŁO/KONKRET/ZNACZENIE w rozwinięciu, zakaz spłycania bogatych źródeł.
+- **Tagi — twarde egzekwowanie w kodzie** (route.ts): max 1 tag spoza katalogu top-60, łącznie max 5; prompt dodatkowo zakazuje tagów-ogólników ("zarząd", "odejścia"). Sam prompt nie wystarczał.
+- **Quality gate**: nowa kara -10 za <380 słów ("płytki").
+- **Wolumen: rewizja decyzji** — 2×3 → **3×3 (9/dzień, 05/11/17 UTC)**. Uzasadnienie: właściciel chce skali poważnego serwisu; 9/dzień to wciąż -25% od starego 12/dzień, a jakość per artykuł jest teraz nieporównywalnie wyższa (information gain + Sonnet 5), więc profil scaled-content maleje mimo wyższego wolumenu.
+- **Strona główna — najnowsze zawsze na górze**: hero (1) + kolumna (4) + siatka (4) = 9 najnowszych nad sekcjami kategorii (pełny dzień publikacji widoczny od wejścia); stara rotacja per-kategoria potrafiła schować świeży artykuł. Box Preferred Sources przeniesiony na dół strony.
 
 ---
 
@@ -124,7 +135,7 @@ To jest jednocześnie Twój cel wizerunkowy — serwis firmowany nazwiskiem budu
 
 Zasada: **mniej, ale z wartością, której nie ma w źródle.** Konkurujesz z Google AI Overviews i z oryginałem — czysta parafraza przegrywa z oboma.
 
-- [x] ~~**Zmniejsz wolumen**~~ ✅ 2026-08-11: `vercel.json` 2×3 (05:00 / 15:00 UTC).
+- [x] ~~**Zmniejsz wolumen**~~ ✅ 2026-08-11, **zrewidowane tego samego dnia**: finalnie 3×3 = 9/dzień (05/11/17 UTC) — mniej niż stare 12/dzień, ale ze skokiem jakości per artykuł (Sonnet 5 + głębszy prompt; zob. §1b). Skala + jakość zamiast samej redukcji.
 - [x] ~~**Polski kąt w promptcie**~~ ✅ 2026-08-11: zasada nr 10 w `prompts.ts` (sekcja „Co to oznacza dla Polski" z anty-halucynacyjnymi ogranicznikami) + dywersyfikacja struktury + linkowanie wewnętrzne (1–3 linki z listy ostatnich 40 artykułów, sanitizer w `lib/ai/internal-links.ts`).
 - [ ] **1 tekst autorski tygodniowo, pisany przez człowieka** (Ty): cotygodniowe podsumowanie „Tydzień w AI po polsku" (format newsletterowy, idealny też do dystrybucji), test narzędzia po polsku (jak radzi sobie z polszczyzną — genuinely underserved temat!), albo komentarz do wydarzenia. Podpisany nazwiskiem. To jest treść, którą linkują inni.
 - [ ] **Przegląd wsteczny**: w `/admin/artykuly` masz listę — wyłącz z indeksu (unpublish) najsłabsze teksty z przeszłości (krótkie, bliskie źródłu). Mniejszy, czystszy indeks > większy, śmieciowy. (AdSense-owy case study: odrzucony serwis przeszedł review po wycięciu słabych stron.)

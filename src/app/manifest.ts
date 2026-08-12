@@ -8,10 +8,10 @@ export default function manifest(): MetadataRoute.Manifest {
     start_url: "/",
     display: "standalone",
     background_color: "#fafafa",
-    // Musi zgadzać się z --primary (oklch(0.50 0.24 270) ≈ #5b3df7) używanym
-    // w brand-icon.tsx i opengraph-image.tsx — inaczej pasek PWA odjeżdża
-    // kolorem od ikony.
-    theme_color: "#5b3df7",
+    // Ikony brandowe mają jasny kafelek (tło jak logo — zob. brand-icon.tsx),
+    // więc chrome PWA też jest jasny, spójnie z themeColor light w layout.tsx.
+    // Poprzedni #5b3df7 pasował do starej fioletowej ikony „a.".
+    theme_color: "#fafafa",
     lang: "pl",
     icons: [
       // Static PNGs in /public/. Pre-rendered (not generated on demand) so

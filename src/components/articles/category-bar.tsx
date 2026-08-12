@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 import type { Category } from "@/types/database";
 import { cn } from "@/lib/utils";
 
@@ -12,12 +12,32 @@ interface CategoryBarProps {
 
 const SCROLL_STORAGE_KEY = "aifeed:category-bar-scroll";
 
+// Hydration gate — ten sam wzorzec co detekcja Mac w header.tsx. Server i
+// pierwszy render klienta widzą `false`, po hydratacji React re-renderuje
+// z `true`.
+const noopSubscribe = () => () => {};
+const getHydratedSnapshot = () => true;
+const getServerSnapshot = () => false;
+
 export function CategoryBar({ categories }: CategoryBarProps) {
   const pathname = usePathname();
-  const activeSlug = pathname.startsWith("/kategoria/")
-    ? pathname.split("/")[2]
-    : undefined;
-  const isHome = pathname === "/";
+
+  // Podświetlenie aktywnego pilla uzbrajamy dopiero PO hydratacji. Powód
+  // (zaobserwowany na produkcji 2026-08-12): przy regeneracji ISR na Vercelu
+  // `usePathname()` nie zwraca ścieżki strony (w przeciwieństwie do
+  // prerenderu w build time), więc zregenerowany HTML strony głównej miał
+  // "Wszystko" bez stanu aktywnego. React w produkcji NIE porównuje atrybutów
+  // przy hydratacji, a bez zmiany vnode między renderami nigdy ich nie
+  // nadpisze — stale nieaktywna klasa zostawała na zawsze. Gate wymusza
+  // render inactive→active po mount'cie, więc DOM zawsze dostaje diff
+  // i stan końcowy jest poprawny niezależnie od tego, co wyrenderował serwer.
+  const hydrated = useSyncExternalStore(noopSubscribe, getHydratedSnapshot, getServerSnapshot);
+
+  const activeSlug =
+    hydrated && pathname.startsWith("/kategoria/")
+      ? pathname.split("/")[2]
+      : undefined;
+  const isHome = hydrated && pathname === "/";
   const isHidden = pathname.startsWith("/artykul/");
   const scrollerRef = useRef<HTMLUListElement>(null);
 

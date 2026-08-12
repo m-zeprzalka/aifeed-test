@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 const noopSubscribe = () => () => {};
 const getMacSnapshot = () => /Mac|iPhone|iPad|iPod/.test(navigator.platform);
 const getServerSnapshot = () => false;
+const getHydratedSnapshot = () => true;
 
 export function Header() {
   const pathname = usePathname();
@@ -33,6 +34,13 @@ export function Header() {
   // mid-session); we only need React to read it once on client.
   const isMac = useSyncExternalStore(noopSubscribe, getMacSnapshot, getServerSnapshot);
   const searchShortcut = isMac ? "⌘K" : "Ctrl+K";
+
+  // Hydration gate dla aktywnego linku w menu mobilnym — ten sam problem i
+  // wzorzec co w CategoryBar (zob. komentarz tam): regeneracja ISR renderuje
+  // usePathname() bez ścieżki strony, a React w produkcji nie łata atrybutów
+  // przy hydratacji, więc bez wymuszonego diffa aktywny stan zostawałby
+  // nieaktywny do końca sesji.
+  const hydrated = useSyncExternalStore(noopSubscribe, getHydratedSnapshot, getServerSnapshot);
 
   // Keydown handler dep'd on both states. Re-binding on each state change is
   // cheap (single addEventListener swap on rare events) and React Compiler
@@ -204,15 +212,15 @@ export function Header() {
                 <li>
                   <Link
                     href="/"
-                    aria-current={pathname === "/" ? "page" : undefined}
-                    className={cn("block", mobileLinkClass(pathname === "/"))}
+                    aria-current={hydrated && pathname === "/" ? "page" : undefined}
+                    className={cn("block", mobileLinkClass(hydrated && pathname === "/"))}
                   >
                     Wszystko
                   </Link>
                 </li>
                 {siteConfig.categories.map((cat) => {
                   const href = `/kategoria/${cat.slug}`;
-                  const active = pathname === href;
+                  const active = hydrated && pathname === href;
                   return (
                     <li key={cat.slug}>
                       <Link

@@ -423,7 +423,8 @@ export const getTickerArticles = cache(async (limit = 10): Promise<{ title: stri
 
 // ===================== TAG PAGES =====================
 
-// cache() — generateMetadata, page i getArticlesByTag wołają to 3× na request.
+// cache() — generateMetadata, page i getArticlesByTagPaginated wołają to
+// 3× na request.
 export const getTagBySlug = cache(async (slug: string): Promise<Tag | null> => {
   const { data, error } = await db()
     .from("tags")
@@ -438,30 +439,71 @@ export const getTagBySlug = cache(async (slug: string): Promise<Tag | null> => {
   return data;
 });
 
-export async function getArticlesByTag(tagSlug: string, limit = 50): Promise<ArticleWithRelations[]> {
+/**
+ * Paginacja po tagu — ten sam kształt i kontrakt co
+ * `getArticlesByCategoryPaginated` (strona tagu reużywa `Pagination`).
+ *
+ * Filtr przez embedded resource `article_tags!inner` + `.eq()` na kolumnie
+ * joina: jeden indeksowany JOIN po `idx_article_tags_tag_id` i `count:
+ * "exact"` z prawdziwą liczbą wpisów. Poprzednia wersja ciągnęła listę
+ * article_id osobnym zapytaniem (PostgREST tnie każdą odpowiedź do 1000
+ * rzędów — popularny tag po cichu gubiłby starsze artykuły) i miała twardy
+ * `limit 50`, przez co strona tagu zawsze pokazywała „50 artykułów".
+ */
+export async function getArticlesByTagPaginated(
+  tagSlug: string,
+  pageSize = 12,
+  page = 1,
+): Promise<PaginatedResult> {
+  const safePage = Math.max(1, Math.floor(page) || 1);
+
   const tag = await getTagBySlug(tagSlug);
-  if (!tag) return [];
 
-  const { data: articleTagRows, error: atError } = await db()
-    .from("article_tags")
-    .select("article_id")
-    .eq("tag_id", tag.id);
+  if (!tag) {
+    return { articles: [], page: safePage, pageSize, total: 0, totalPages: 0, hasPrev: false, hasNext: false };
+  }
 
-  if (atError || !articleTagRows || articleTagRows.length === 0) return [];
+  const { count } = await db()
+    .from("articles")
+    .select("article_tags!inner(tag_id)", { count: "exact", head: true })
+    .eq("is_published", true)
+    .eq("article_tags.tag_id", tag.id);
 
-  const articleIds = articleTagRows.map((r) => r.article_id);
+  const total = count || 0;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const from = (safePage - 1) * pageSize;
+  const to = from + pageSize - 1;
+
+  if (total === 0 || from >= total) {
+    return { articles: [], page: safePage, pageSize, total, totalPages, hasPrev: safePage > 1, hasNext: false };
+  }
 
   const { data: articles, error } = await db()
     .from("articles")
-    .select("*, category:categories(*)")
+    .select("*, category:categories(*), article_tags!inner(tag_id)")
     .eq("is_published", true)
-    .in("id", articleIds)
+    .eq("article_tags.tag_id", tag.id)
+    // Tiebreaker po `id` — jak w kategorii (stabilne strony paginacji).
     .order("published_at", { ascending: false })
-    .limit(limit);
+    .order("id", { ascending: false })
+    .range(from, to);
 
-  if (error || !articles || articles.length === 0) return [];
+  if (error || !articles || articles.length === 0) {
+    if (error) console.error("[data] getArticlesByTagPaginated failed:", error.message);
+    return { articles: [], page: safePage, pageSize, total, totalPages, hasPrev: safePage > 1, hasNext: false };
+  }
 
-  return attachTagsBatch(articles);
+  const withTags = await attachTagsBatch(articles);
+
+  return {
+    articles: withTags,
+    page: safePage,
+    pageSize,
+    total,
+    totalPages,
+    hasPrev: safePage > 1,
+    hasNext: safePage < totalPages,
+  };
 }
 
 // ===================== ADJACENT ARTICLES =====================

@@ -187,11 +187,14 @@ export function categoryMetadata(category: Category, page = 1): Metadata {
  * Odwrót (przywrócenie indeksacji) ma sens dopiero po skonsolidowaniu
  * katalogu tagów i dodaniu na nie realnej treści.
  */
-export function tagMetadata(tag: Tag): Metadata {
+export function tagMetadata(tag: Tag, page = 1): Metadata {
+  // Paginacja jak w `categoryMetadata`: każda strona z własnym canonicalem
+  // (?page=N) i tytułem — mimo noindex utrzymujemy poprawne sygnały.
+  const path = page > 1 ? `/tag/${tag.slug}?page=${page}` : `/tag/${tag.slug}`;
   const base = buildPageMetadata({
-    title: `#${tag.name}`,
+    title: page > 1 ? `#${tag.name} — strona ${page}` : `#${tag.name}`,
     description: `Artykuły oznaczone tagiem #${tag.name} — wiadomości i analizy AI na ${siteConfig.name}.`,
-    path: `/tag/${tag.slug}`,
+    path,
     ogType: "website",
   });
   return { ...base, robots: { index: false, follow: true } };

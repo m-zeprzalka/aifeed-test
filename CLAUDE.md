@@ -83,12 +83,13 @@ curl -X POST -H "Authorization: Bearer $CRON_SECRET" \
 | `/` (`(home)` group) | 300 s | **newest-first top**: 9 latest (hero+column+grid) above category sections, no duplicates; Preferred Sources box at the bottom (owner decisions); sr-only h1 (owner decision) |
 | `/artykul/[slug]` | 60 s | prerenders top 500; NewsArticle JSON-LD; TOC anchors via shared `slugifyHeading` + `stripInlineMarkdown` |
 | `/kategoria/[slug]?page=N` | 300 s* | *dynamic (searchParams); empty page>1 → `notFound()` — keep this, it kills a soft-404 space |
-| `/tag/[slug]` | 300 s | **noindex, follow; excluded from sitemap** (thin content, ~73% of tags have 1 article). Don't re-index without ROADMAP #5.1 (catalog consolidation) |
+| `/tag/[slug]?page=N` | 300 s* | *dynamic (searchParams); paginated like kategoria (empty page>1 → `notFound()`); real total via `getArticlesByTagPaginated`. **noindex, follow; excluded from sitemap** (thin content, ~73% of tags have 1 article). Don't re-index without ROADMAP #5.1 (catalog consolidation) |
 | `/szukaj` | — | client; noindex; NOT in robots.txt Disallow (noindex needs crawlability) |
 | `/news-sitemap.xml` | 900 s | Google News sitemap, only articles < 48 h; listed in robots.txt next to sitemap.xml |
 | `/indexnow.txt` | dynamic | IndexNow key from env (`INDEXNOW_KEY`; unset → 404) |
 | `/redakcja` | static | site-creator page (Person JSON-LD, `siteConfig.author`) + `founder` in NewsMediaOrganization. **The name endorses the SITE, not individual articles**: article `author` stays Organization, no visible byline (owner decision — don't add per-article Person/bylines without a process change) |
-| `/icon-192.png` `/icon-512.png` `/apple-icon.png` | build-static | generated from `src/lib/brand-icon.tsx`; referenced by manifest + JSON-LD logos — don't delete |
+| `/icon-192.png` `/icon-512.png` `/apple-icon.png` | build-static | generated from `src/lib/brand-icon.tsx` (glyph outlines of "ai." in Plus Jakarta Sans — no font file at runtime); referenced by manifest + JSON-LD logos — don't delete |
+| `/icon.svg` `/icon-light.svg` `/icon-dark.svg` | build-static | favicon SVG routes from `brand-icon.tsx`; `/icon.svg` auto light/dark via media query (linked manually in root layout `<head>`), explicit variants swapped by `ThemeFavicon` on theme toggle |
 | `/admin/*` | dynamic | Basic Auth + noindex (3 layers) |
 
 API: `/api/cron/generate` (Bearer, `?count` ∈ [1,15], default 4; crons call with 3); `/api/newsletter` (5/min/IP); `/api/search` (30/min/IP, ≤100 chars). Rate limiting is in-memory per-instance (deliberate MVP choice — upgrade trigger in ROADMAP #5.5).
@@ -118,3 +119,13 @@ Tests live next to source (`src/**/*.test.{ts,tsx}`; 84 tests). `data.test.ts` i
 Vercel project `aifeed-pl` (team `m-zeprzalkas-projects`), canonical domain `https://www.aifeed.pl`. Crons in `vercel.json` (05/11/17 UTC, count=3). **Deploy flow: `git push` (GitHub `m-zeprzalka/aifeed-test`) does NOT auto-deploy — the Vercel project has no Git integration (deliberate; migration to a Vercel PRO account is planned). Always follow a push with `npx vercel deploy --prod --yes`.** Required env vars: see `.env.example` (complete, commented; `INDEXNOW_KEY` optional — Production only). Production rollout checklist: `ROADMAP.md` §2.
 
 Pre-push gate: `npx tsc --noEmit && npm run lint && npm test && npm run build` — all green, always.
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->

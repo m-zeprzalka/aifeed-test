@@ -21,8 +21,9 @@ export const metadata = homeMetadata();
 
 export const revalidate = 300;
 
-// How many articles to fetch per category. Enough to fill the hero slot (1)
-// plus the per-category section below (up to 4) without re-querying.
+// How many articles to fetch per category. Enough to cover the biggest
+// section layout (Layout C: 2 featured + 3 grid = 5) plus one spare for
+// articles filtered out as duplicates of the newest-first block above.
 const PER_CATEGORY = 6;
 
 // How many of the newest articles get guaranteed above-the-fold placement.
@@ -216,18 +217,27 @@ export default async function HomePage() {
                   ))}
                 </div>
               ) : (
-                /* Layout C: Featured wide card + grid below. (Bez `priority` —
-                   catIndex===0 zawsze bierze Layout A, więc warunek był tu
-                   martwy; sekcje C są głęboko poniżej fold.) */
+                /* Layout C: dwa featured 50/50 na desktopie (decyzja
+                   właściciela 2026-08-12 — jeden wpis na całą szerokość
+                   containera przytłaczał sekcję) + siatka niżej.
+                   `priority={false}` jawnie: FeaturedCard domyślnie ustawia
+                   priority=true (jest hero na home), a sekcje C leżą głęboko
+                   pod foldem — dwa preloady obrazów psułyby LCP. */
                 <div className="space-y-5">
-                  <ArticleCard
-                    article={lead}
-                    variant="featured"
-                    className="min-h-[240px] lg:min-h-[300px]"
-                  />
-                  {side.length > 0 && (
+                  <div className="grid gap-5 lg:grid-cols-2">
+                    {cat.articles.slice(0, 2).map((article) => (
+                      <ArticleCard
+                        key={article.id}
+                        article={article}
+                        variant="featured"
+                        priority={false}
+                        className="min-h-[240px] lg:min-h-[280px]"
+                      />
+                    ))}
+                  </div>
+                  {cat.articles.length > 2 && (
                     <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-                      {side.map((article) => (
+                      {cat.articles.slice(2, 5).map((article) => (
                         <ArticleCard key={article.id} article={article} />
                       ))}
                     </div>

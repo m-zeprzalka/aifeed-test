@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Search as SearchIcon, FileQuestion, AlertTriangle } from "lucide-react";
-import { ArticleCard } from "@/components/articles/article-card";
+import { ArticleGrid } from "@/components/articles/article-grid";
 import { EmptyState } from "@/components/ui/empty-state";
 import type { ArticleWithRelations } from "@/lib/data";
 import { pluralize, SEARCH_QUERY_MAX_LENGTH } from "@/lib/search-utils";
@@ -55,19 +55,9 @@ export default function SearchPage() {
           description="Zbyt wiele zapytań albo problem z połączeniem. Odczekaj chwilę i spróbuj ponownie."
         />
       ) : results.length > 0 ? (
-        <div className="grid gap-5 sm:grid-cols-2">
-          {results.map((article, i) => (
-            <div
-              key={article.id}
-              className="animate-fade-in-up"
-              // Cap the stagger at 6 so the 7th+ result doesn't wait nearly
-              // half a second to appear; visually identical past that point.
-              style={{ "--stagger": Math.min(i, 6) } as React.CSSProperties}
-            >
-              <ArticleCard article={article} />
-            </div>
-          ))}
-        </div>
+        // Kontener /szukaj to max-w-4xl — trzy kolumny z defaultu ArticleGrid
+        // byłyby za ciasne, stąd nadpisanie do dwóch.
+        <ArticleGrid articles={results} className="lg:grid-cols-2" />
       ) : searched && !loading ? (
         <EmptyState
           icon={FileQuestion}

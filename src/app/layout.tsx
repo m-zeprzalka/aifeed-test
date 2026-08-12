@@ -4,6 +4,7 @@ import { Header } from "@/components/layout/header";
 import { NewsTicker } from "@/components/layout/news-ticker";
 import { Footer } from "@/components/layout/footer";
 import { ScrollToTop } from "@/components/layout/scroll-to-top";
+import { ThemeFavicon } from "@/components/layout/theme-favicon";
 import { CategoryBar } from "@/components/articles/category-bar";
 import { ThemeProvider } from "@/components/theme-provider";
 import { siteConfig } from "@/config/site";
@@ -179,6 +180,15 @@ export default async function RootLayout({
             jest dziś zbędny. */}
         {supabaseOrigin && <link rel="preconnect" href={supabaseOrigin} />}
 
+        {/* Favicon SVG (auto light/dark przez media query w środku pliku).
+            Ręczny <link> zamiast file-convention: /icon.svg to route handler
+            (zob. src/app/icon.svg/route.ts), więc Next nie doda linku sam.
+            Auto-link do /favicon.ico zostaje jako fallback dla starszych
+            przeglądarek i Safari. Po hydratacji ThemeFavicon (niżej) dokleja
+            własny link zsynchronizowany z przełącznikiem motywu. */}
+        <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+
+
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: jsonLdScript(ORGANIZATION_JSON_LD) }}
@@ -207,6 +217,7 @@ export default async function RootLayout({
           >
             Przejdź do treści
           </a>
+          <ThemeFavicon />
           <NewsTicker items={tickerItems} />
           <Header />
           <CategoryBar categories={categories} />

@@ -1,8 +1,9 @@
 import { notFound } from "next/navigation";
 import { Newspaper } from "lucide-react";
-import { ArticleCard } from "@/components/articles/article-card";
-import { Pagination } from "@/components/ui/pagination";
+import { ArticleGrid } from "@/components/articles/article-grid";
 import { Breadcrumbs } from "@/components/articles/breadcrumbs";
+import { ListingHeader } from "@/components/articles/listing-header";
+import { Pagination } from "@/components/ui/pagination";
 import { EmptyState } from "@/components/ui/empty-state";
 import { getCategoryBySlug, getArticlesByCategoryPaginated } from "@/lib/data";
 import { siteConfig } from "@/config/site";
@@ -96,34 +97,15 @@ export default async function CategoryPage({ params, searchParams }: PageProps) 
           ]}
         />
 
-        {/* Header */}
-        <div className="mb-8 mt-3">
-          <span className="mb-2 inline-block text-xs font-mono font-bold uppercase tracking-widest text-muted-foreground">
-            Kategoria
-          </span>
-          <h1 className="text-2xl sm:text-3xl font-heading font-extrabold tracking-tight text-balance">
-            {category.name}
-          </h1>
-          {category.description && (
-            <p className="mt-3 text-lg text-muted-foreground max-w-xl">
-              {category.description}
-            </p>
-          )}
-        </div>
+        <ListingHeader
+          eyebrow="Kategoria"
+          title={category.name}
+          description={category.description || undefined}
+        />
 
         {articles.length > 0 ? (
           <>
-            <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-              {articles.map((article, i) => (
-                <div
-                  key={article.id}
-                  className="animate-fade-in-up"
-                  style={{ "--stagger": Math.min(i + 1, 6) } as React.CSSProperties}
-                >
-                  <ArticleCard article={article} />
-                </div>
-              ))}
-            </div>
+            <ArticleGrid articles={articles} />
 
             <Pagination
               basePath={`/kategoria/${slug}`}

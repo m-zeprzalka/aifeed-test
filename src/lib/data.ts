@@ -346,11 +346,33 @@ export const getPopularTags = cache(async (limit = 10): Promise<Tag[]> => {
 
   // Fallback — only runs when the RPC hasn't been deployed yet.
   console.warn("[data] getPopularTags RPC missing, falling back to in-memory aggregate");
-  const { data: countRows, error: countError } = await db()
-    .from("article_tags")
-    .select("tag_id");
 
-  if (countError || !countRows || countRows.length === 0) return [];
+  // PostgREST tnie KAŻDĄ odpowiedź do 1000 rzędów (zob. getSitemapArticles) —
+  // pojedynczy select na article_tags liczyłby popularność z wycinka danych
+  // (produkcja 2026-08-12: 6388 wierszy → ranking z ~16% próbki i „trendy"
+  // niezgodne z realną popularnością). Stronicujemy z deterministycznym
+  // ORDER BY po kluczu złożonym; cap 20k wierszy to margines ~3× nad obecnym
+  // wolumenem — do tego czasu RPC powinno być zaaplikowane (migracja 001).
+  const BATCH = 1000;
+  const MAX_ROWS = 20_000;
+  const countRows: { tag_id: string }[] = [];
+  for (let from = 0; from < MAX_ROWS; from += BATCH) {
+    const { data, error } = await db()
+      .from("article_tags")
+      .select("article_id, tag_id")
+      .order("article_id", { ascending: true })
+      .order("tag_id", { ascending: true })
+      .range(from, from + BATCH - 1);
+
+    if (error) {
+      console.error("[data] getPopularTags fallback page failed:", error.message);
+      break;
+    }
+    countRows.push(...(data ?? []));
+    if (!data || data.length < BATCH) break;
+  }
+
+  if (countRows.length === 0) return [];
 
   const countMap = new Map<string, number>();
   for (const row of countRows) {

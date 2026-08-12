@@ -5,6 +5,7 @@ import { generateArticle } from "@/lib/ai/writer";
 import { assessArticleQuality } from "@/lib/ai/quality";
 import { getArticleThumbnail } from "@/lib/images/generator";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { getPopularTags } from "@/lib/data";
 import { logPipelineEvent, newRunId } from "@/lib/telemetry";
 import { pingIndexNow } from "@/lib/indexnow";
 import { siteConfig } from "@/config/site";
@@ -130,10 +131,13 @@ async function runPipeline(request: NextRequest) {
     // Katalog popularnych tagów — raz na run, przekazywany do promptu, żeby
     // AI wybierało z istniejącej taksonomii zamiast płodzić warianty pisowni
     // (root cause rozdrobnienia katalogu: ~73% tagów z 1 artykułem).
-    const { data: popularTagRows } = await supabase.rpc("popular_tags", { tag_limit: 100 });
-    const existingTags: string[] = Array.isArray(popularTagRows)
-      ? popularTagRows.map((t: { name: string }) => t.name).filter(Boolean)
-      : [];
+    // Przez getPopularTags (lib/data), nie surowe RPC: gdy `popular_tags`
+    // nie istnieje w bazie (stan produkcji 2026-08-12, migracja 001
+    // niezaaplikowana), surowe RPC zwracało błąd i prompt dostawał PUSTY
+    // katalog w każdym runie — getPopularTags ma paginowany fallback.
+    const existingTags: string[] = (await getPopularTags(100))
+      .map((t) => t.name)
+      .filter(Boolean);
 
     // Kandydaci do linkowania wewnętrznego — 40 ostatnich opublikowanych
     // artykułów (tytuł + slug). AI wplata 1-3 kontekstowe linki wyłącznie z

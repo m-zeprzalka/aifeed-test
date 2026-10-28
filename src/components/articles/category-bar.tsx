@@ -3,12 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useSyncExternalStore } from "react";
-import type { Category } from "@/types/database";
+import { siteConfig } from "@/config/site";
 import { cn } from "@/lib/utils";
-
-interface CategoryBarProps {
-  categories: Category[];
-}
 
 const SCROLL_STORAGE_KEY = "aifeed:category-bar-scroll";
 
@@ -19,7 +15,7 @@ const noopSubscribe = () => () => {};
 const getHydratedSnapshot = () => true;
 const getServerSnapshot = () => false;
 
-export function CategoryBar({ categories }: CategoryBarProps) {
+export function CategoryBar() {
   const pathname = usePathname();
 
   // Podświetlenie aktywnego pilla uzbrajamy dopiero PO hydratacji. Powód
@@ -172,7 +168,7 @@ export function CategoryBar({ categories }: CategoryBarProps) {
               Wszystko
             </Link>
           </li>
-          {categories.map((cat) => {
+          {siteConfig.categories.map((cat) => {
             const isActive = activeSlug === cat.slug;
             return (
               <li key={cat.slug} className="shrink-0 whitespace-nowrap">

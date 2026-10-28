@@ -89,14 +89,15 @@ export function buildPageMetadata(
   // NIE dokleja automatycznie `images` z file-convention `app/opengraph-image.tsx`.
   // Bez tego defaultu strony bez własnego image (home/kategoria/tag/static) nie
   // miałyby żadnego OG preview na social media.
-  const fallbackImage = { url: "/opengraph-image", alt: siteConfig.name };
-  const chosen = input.image ?? fallbackImage;
-  const imageObject = [{
-    url: chosen.url,
-    width: 1200,
-    height: 630,
-    alt: chosen.alt ?? input.title,
-  }];
+  //
+  // Wymiary deklarujemy WYŁĄCZNIE dla własnej karty (znamy je: 1200×630).
+  // Miniatury artykułów pochodzą z różnych źródeł i mają różne proporcje —
+  // stałe "1200×630" przy nich było nieprawdą, którą część scraperów social
+  // bierze dosłownie (złe przycięcie podglądu).
+  const imageObject = input.image
+    ? [{ url: input.image.url, alt: input.image.alt ?? input.title }]
+    : [{ url: "/opengraph-image", width: 1200, height: 630, alt: siteConfig.name }];
+  const chosen = imageObject[0];
 
   return {
     title: input.title,
@@ -268,6 +269,82 @@ export function searchPageMetadata(): Metadata {
 }
 
 // ===================== JSON-LD HELPERS =====================
+
+/**
+ * Stabilne identyfikatory encji (`@id`) — jeden graf zamiast luźnych,
+ * powtarzanych obiektów. NewsArticle/WebSite odwołują się do TEJ SAMEJ
+ * organizacji co NewsMediaOrganization w root layoucie, a `founder` do tej
+ * samej osoby co Person na /redakcja. Google łączy encje po `@id`, więc
+ * sygnały E-E-A-T (polityki redakcyjne, założyciel, sameAs) przechodzą na
+ * każdy artykuł bez duplikowania pól.
+ */
+export const ORGANIZATION_ID = `${siteConfig.url}/#organization`;
+export const WEBSITE_ID = `${siteConfig.url}/#website`;
+export const FOUNDER_ID = `${siteConfig.url}/redakcja#person`;
+
+const LOGO = {
+  "@type": "ImageObject",
+  url: `${siteConfig.url}/icon-512.png`,
+  width: 512,
+  height: 512,
+} as const;
+
+/**
+ * Referencja do wydawcy dla NewsArticle (`author`/`publisher`). Poza `@id`
+ * powtarzamy nazwę, URL i logo — walidatory (Rich Results Test) i parsery
+ * spoza Google nie zawsze rozwiązują referencje między blokami.
+ */
+export function publisherReference() {
+  return {
+    "@type": "NewsMediaOrganization",
+    "@id": ORGANIZATION_ID,
+    name: siteConfig.name,
+    url: siteConfig.url,
+    logo: LOGO,
+  } as const;
+}
+
+/**
+ * Pełny opis wydawcy — renderowany raz, w root layoucie (każda strona).
+ * `sameAs` celowo pominięte: tylko zweryfikowane profile SERWISU (żadnych
+ * jeszcze nie ma — ROADMAP), a wskazywanie 404-ek szkodzi zaufaniu do danych
+ * strukturalnych. Kotwice polityk wskazują realne sekcje /o-serwisie —
+ * zmiana `id` tam wymaga zmiany tutaj.
+ */
+export function organizationJsonLd() {
+  return {
+    "@context": "https://schema.org",
+    ...publisherReference(),
+    description: siteConfig.description,
+    email: siteConfig.contactEmail,
+    publishingPrinciples: `${siteConfig.url}/o-serwisie#jak-powstaja-teksty`,
+    correctionsPolicy: `${siteConfig.url}/o-serwisie#zglos-blad`,
+    actionableFeedbackPolicy: `${siteConfig.url}/o-serwisie#zglos-blad`,
+    // Imienny założyciel (decyzja 2026-08-11) — ta sama encja co Person na
+    // /redakcja. Nazwisko firmuje SERWIS, nie pojedyncze artykuły.
+    founder: {
+      "@type": "Person",
+      "@id": FOUNDER_ID,
+      name: siteConfig.author.name,
+      url: `${siteConfig.url}/redakcja`,
+      sameAs: siteConfig.author.sameAs,
+    },
+  };
+}
+
+/** WebSite (strona główna). Bez `SearchAction` — Google wycofał sitelinks searchbox (2024). */
+export function websiteJsonLd() {
+  return {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    "@id": WEBSITE_ID,
+    name: siteConfig.name,
+    url: siteConfig.url,
+    description: siteConfig.description,
+    inLanguage: "pl-PL",
+    publisher: { "@id": ORGANIZATION_ID },
+  };
+}
 
 /**
  * Spójny `CollectionPage` + zagnieżdżony `ItemList` dla list artykułów

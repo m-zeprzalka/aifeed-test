@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Loader2, Check } from "lucide-react";
+import Link from "next/link";
+import { Loader2, MailCheck } from "lucide-react";
 
 interface NewsletterFormProps {
   variant?: "default" | "compact";
@@ -9,6 +10,8 @@ interface NewsletterFormProps {
 
 export function NewsletterForm({ variant = "default" }: NewsletterFormProps) {
   const [email, setEmail] = useState("");
+  // Honeypot (zob. /api/newsletter) — ludzie go nie widzą i nie wypełniają.
+  const [website, setWebsite] = useState("");
   const [status, setStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [message, setMessage] = useState("");
 
@@ -21,13 +24,12 @@ export function NewsletterForm({ variant = "default" }: NewsletterFormProps) {
       const res = await fetch("/api/newsletter", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.trim() }),
+        body: JSON.stringify({ email: email.trim(), website }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
       if (res.ok) {
         setStatus("success");
-        setMessage("Zapisano! Dziękujemy za subskrypcję.");
         setEmail("");
       } else {
         setStatus("error");
@@ -40,12 +42,15 @@ export function NewsletterForm({ variant = "default" }: NewsletterFormProps) {
   };
 
   if (status === "success") {
-    // green-700/300 instead of green-600/400 for WCAG AA contrast against
-    // muted backgrounds — the lighter shades drop below 4.5:1.
+    // Double opt-in: zapis jest aktywny dopiero po kliknięciu w link z maila.
+    // green-700/300 zamiast 600/400 — kontrast WCAG AA na tle muted.
     return (
-      <div role="status" className="flex items-center gap-1.5 text-sm text-green-700 dark:text-green-300">
-        <Check className="size-3.5" aria-hidden="true" />
-        <span>{message}</span>
+      <div role="status" className="flex items-start gap-2 text-sm text-green-700 dark:text-green-300">
+        <MailCheck className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+        <span>
+          <strong className="font-semibold">Prawie gotowe!</strong> Sprawdź skrzynkę i kliknij link
+          potwierdzający — bez tego nie wyślemy Ci newslettera.
+        </span>
       </div>
     );
   }
@@ -58,9 +63,10 @@ export function NewsletterForm({ variant = "default" }: NewsletterFormProps) {
         <input
           type="email"
           required
+          autoComplete="email"
           aria-label="Adres email do newslettera"
           aria-invalid={status === "error"}
-          aria-describedby={status === "error" ? "newsletter-error" : undefined}
+          aria-describedby={status === "error" ? "newsletter-error" : "newsletter-consent"}
           placeholder="twoj@email.pl"
           value={email}
           onChange={(e) => {
@@ -87,9 +93,27 @@ export function NewsletterForm({ variant = "default" }: NewsletterFormProps) {
           )}
         </button>
       </div>
-      {status === "error" && (
+      {/* Honeypot — poza ekranem i poza drzewem a11y/tab-order. */}
+      <input
+        type="text"
+        name="website"
+        tabIndex={-1}
+        autoComplete="off"
+        aria-hidden="true"
+        value={website}
+        onChange={(e) => setWebsite(e.target.value)}
+        className="absolute -left-[9999px] h-px w-px opacity-0"
+      />
+      {status === "error" ? (
         <p id="newsletter-error" role="alert" className="text-xs text-destructive">
           {message}
+        </p>
+      ) : (
+        <p id="newsletter-consent" className="text-[11px] leading-snug text-muted-foreground/80">
+          Wyślemy e-mail z linkiem potwierdzającym. Wypiszesz się jednym kliknięciem.{" "}
+          <Link href="/polityka-prywatnosci" className="underline underline-offset-2 hover:text-foreground">
+            Polityka prywatności
+          </Link>
         </p>
       )}
     </form>

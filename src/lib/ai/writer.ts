@@ -1,9 +1,13 @@
-import { ARTICLE_SYSTEM_PROMPT, ARTICLE_USER_PROMPT } from "./prompts";
+import { buildArticleSystemPrompt, ARTICLE_USER_PROMPT } from "./prompts";
 import { sanitizeInternalLinks } from "./internal-links";
+import { OPENROUTER_API_URL, openRouterCostUsd, openRouterHeaders, type OpenRouterUsage } from "./openrouter";
+import { countWords } from "./quality";
 import { polishTypography } from "../typography";
+import { stripInlineMarkdown } from "../heading-id";
 import { logPipelineEvent } from "@/lib/telemetry";
+import { siteConfig, type CategorySlug } from "@/config/site";
+import { tagSlug } from "./tags";
 
-const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 // Sonnet 5 (2026): jakość pisania klasy dawnego Opusa przy cenie NIŻSZEJ niż
 // stary Sonnet 4 ($2/$10 vs $3/$15 za MTok na OpenRouter). Adaptive thinking
 // jest domyślnie WŁĄCZONE — nie wysyłamy parametru `thinking`; max_tokens
@@ -147,23 +151,79 @@ export interface GeneratedArticle {
   reading_time: number;
 }
 
-export async function generateArticle(
-  topic: string,
-  sourceUrls: string[],
-  sourceDescriptions: string[],
-  sourceContent: string = "",
-  // Opcjonalny — gdy przekazany, logujemy koszt OpenRouter do
-  // `pipeline_events` (event: `ai_cost`, type: `article`). Wywoływane z
-  // cron route. Brak runId = standalone use (test/skrypt) — pomijamy log.
-  runId?: string,
-  // Katalog istniejących tagów przekazywany do promptu (dyscyplina
-  // słownika — zob. komentarz w prompts.ts).
-  existingTags: string[] = [],
-  // Kandydaci do linkowania wewnętrznego (tytuł + slug ostatnich artykułów).
-  // AI wplata 1-3 kontekstowe linki; sanitizeInternalLinks gwarantuje, że w
-  // treści zostają wyłącznie linki do slugów z tej listy (zero wewnętrznych 404).
-  internalLinkCandidates: { title: string; slug: string }[] = [],
-): Promise<GeneratedArticle> {
+export interface GenerateArticleInput {
+  /** Tytuł źródła (temat). */
+  topic: string;
+  /** [główne, ...dodatkowe] — pierwszy URL to obowiązkowy link w treści. */
+  sourceUrls: string[];
+  sourceDescriptions: string[];
+  /** Treść źródła (+ sekcje "ŹRÓDŁO DODATKOWE" przy syntezie). */
+  sourceContent: string;
+  /** Kategoria feedu RSS — fallback, gdy AI zwróci slug spoza katalogu. */
+  fallbackCategory: CategorySlug;
+  /** Gdy przekazany, koszt OpenRouter trafia do `pipeline_events` (`ai_cost`). */
+  runId?: string;
+  /** Katalog istniejących tagów (dyscyplina słownika — zob. prompts.ts). */
+  existingTags?: string[];
+  /**
+   * Kandydaci do linkowania wewnętrznego (tytuł + slug). AI wplata 1-3 linki;
+   * `sanitizeInternalLinks` gwarantuje, że zostają wyłącznie slugi z listy.
+   */
+  internalLinkCandidates?: { title: string; slug: string }[];
+  /**
+   * Twardy termin (epoch ms), do którego odpowiedź musi wrócić — budżet
+   * funkcji (maxDuration). Timeout żądania i decyzja o retry liczą się od
+   * niego; bez tego 2 × 120 s + pauza potrafiły przebić limit 300 s.
+   */
+  deadline?: number;
+}
+
+// Minimalny sensowny czas na wygenerowanie artykułu (thinking + ~1000 słów).
+const MIN_GENERATION_MS = 45_000;
+const REQUEST_TIMEOUT_MS = 120_000;
+
+// Polski tekst publicystyczny czyta się w tempie ~200 słów/min. Liczone
+// z treści, nie z szacunku AI — model zgadywał czas czytania niespójnie.
+const WORDS_PER_MINUTE = 200;
+
+/**
+ * Kategoria z odpowiedzi AI → slug z katalogu. Model potrafi wymyślić
+ * nieistniejącą ("edukacja", 2026-10-26) albo zmienić zapis ("Modele AI");
+ * wcześniej taki artykuł lądował z `category_id = NULL` — poza listami
+ * kategorii, sekcjami home i breadcrumbem.
+ */
+const CATEGORY_BY_KEY = new Map<string, CategorySlug>(
+  siteConfig.categories.flatMap((c) => [
+    [c.slug, c.slug],
+    [tagSlug(c.name), c.slug], // "Modele AI" → modele-ai, "Badania i Nauka" → badania
+  ])
+);
+
+export function normalizeCategory(raw: unknown, fallback: CategorySlug): { category: CategorySlug; valid: boolean } {
+  const match = typeof raw === "string" ? CATEGORY_BY_KEY.get(tagSlug(raw)) : undefined;
+  return match ? { category: match, valid: true } : { category: fallback, valid: false };
+}
+
+/** Excerpt awaryjny, gdy META nie ma `excerpt`: pierwszy akapit bez markdownu. */
+function fallbackExcerpt(content: string): string {
+  const firstParagraph = content.split(/\n{2,}/).find((p) => p.trim() && !p.startsWith("#")) ?? content;
+  const plain = stripInlineMarkdown(firstParagraph.replace(/\s+/g, " ").trim());
+  return plain.length > 200 ? `${plain.slice(0, 199).trimEnd()}…` : plain;
+}
+
+export async function generateArticle(input: GenerateArticleInput): Promise<GeneratedArticle> {
+  const {
+    topic,
+    sourceUrls,
+    sourceDescriptions,
+    sourceContent,
+    fallbackCategory,
+    runId,
+    existingTags = [],
+    internalLinkCandidates = [],
+    deadline = Date.now() + 2 * REQUEST_TIMEOUT_MS,
+  } = input;
+
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
     throw new Error("OPENROUTER_API_KEY is not set");
@@ -174,13 +234,12 @@ export async function generateArticle(
     // Thinking (domyślnie aktywne na Sonnet 5) liczy się do max_tokens razem
     // z treścią — 12k daje zapas na ~1200 słów artykułu + rozumowanie.
     max_tokens: 12000,
-    // Bez tego OpenRouter często nie zwraca `usage.total_cost` i telemetria
-    // kosztów w /admin loguje undefined.
+    // Usage Accounting: koszt w `usage.cost` (zob. openrouter.ts).
     usage: { include: true },
     messages: [
       {
         role: "system",
-        content: ARTICLE_SYSTEM_PROMPT,
+        content: buildArticleSystemPrompt(),
       },
       {
         role: "user",
@@ -189,54 +248,63 @@ export async function generateArticle(
     ],
   });
 
-  // Jedna próba ponowienia przy błędach przejściowych (429/5xx/timeout).
-  // Chwilowa czkawka providera nie powinna wyrzucać artykułu z całego runu —
-  // bez retry item wraca do kolejki dopiero przy następnym cronie (−6h).
-  let response: Response | null = null;
+  // Jedna próba ponowienia przy błędach przejściowych (429/5xx/timeout,
+  // zerwany strumień odpowiedzi, 200 bez treści). Odczyt body jest W pętli:
+  // telemetria pokazała `TypeError: terminated` — połączenie padające
+  // w trakcie czytania JSON-a, którego dawny retry (tylko wokół fetch) nie
+  // łapał. Retry tylko, gdy do `deadline` zostało dość czasu; wyjątek wraca
+  // do pipeline'u, który NIE oznacza źródła jako przetworzonego (retry
+  // w następnym cronie).
+  type ChatResponse = { choices?: { message?: { content?: string } }[]; usage?: OpenRouterUsage };
+  let data: ChatResponse | null = null;
+  let responseText = "";
   for (let attempt = 0; attempt < 2; attempt++) {
+    const remaining = deadline - Date.now();
+    if (remaining < MIN_GENERATION_MS) {
+      throw new Error(`Za mało czasu na generację (${Math.round(remaining / 1000)} s do końca budżetu)`);
+    }
+    const isLastAttempt = attempt === 1 || remaining - REQUEST_TIMEOUT_MS < MIN_GENERATION_MS;
     try {
-      response = await fetch(OPENROUTER_API_URL, {
+      const response = await fetch(OPENROUTER_API_URL, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-          "HTTP-Referer": process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000",
-          "X-Title": "AiFeed",
-        },
+        headers: openRouterHeaders(apiKey),
         body: requestBody,
-        // 120s — Sonnet 5 z adaptive thinking potrafi myśleć kilkanaście-
+        // ≤120s — Sonnet 5 z adaptive thinking potrafi myśleć kilkanaście-
         // -kilkadziesiąt sekund przed pisaniem; 90s bywało na styk.
-        signal: AbortSignal.timeout(120_000),
+        signal: AbortSignal.timeout(Math.min(REQUEST_TIMEOUT_MS, remaining)),
       });
       const transient = response.status === 429 || response.status >= 500;
-      if (!transient || attempt === 1) break;
+      if (!response.ok && (!transient || isLastAttempt)) {
+        const errorBody = await response.text().catch(() => "");
+        throw new Error(`OpenRouter API error ${response.status}: ${errorBody.slice(0, 500)}`);
+      }
+      if (response.ok) {
+        data = (await response.json()) as ChatResponse;
+        responseText = data.choices?.[0]?.message?.content || "";
+        if (responseText.trim()) break;
+        if (isLastAttempt) throw new Error("OpenRouter returned an empty completion");
+      }
     } catch (e) {
-      if (attempt === 1) throw e;
-      response = null;
+      const isApiError = e instanceof Error && e.message.startsWith("OpenRouter API error");
+      if (isApiError || isLastAttempt) throw e;
     }
+    if (isLastAttempt) break;
     console.warn(`[Writer] OpenRouter transient failure (attempt ${attempt + 1}), retrying in 3s...`);
     await new Promise((r) => setTimeout(r, 3_000));
   }
 
-  if (!response) {
+  if (!data || !responseText.trim()) {
     throw new Error("OpenRouter request failed after retry");
   }
-  if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(`OpenRouter API error ${response.status}: ${errorBody}`);
-  }
-
-  const data = await response.json();
-  const responseText = data.choices?.[0]?.message?.content || "";
 
   // Token usage + cost — w produkcji idą do `pipeline_events` (dashboard
   // /admin sumuje koszty 7d), w stdout dla local dev.
   const usage = data.usage;
+  const costUsd = openRouterCostUsd(usage);
   if (usage) {
-    console.log(`[AI Cost] Tokens — prompt: ${usage.prompt_tokens}, completion: ${usage.completion_tokens}, total: ${usage.total_tokens}`);
-  }
-  if (data.usage?.total_cost !== undefined) {
-    console.log(`[AI Cost] Total cost: $${data.usage.total_cost}`);
+    console.log(
+      `[AI Cost] Tokens — prompt: ${usage.prompt_tokens}, completion: ${usage.completion_tokens} (reasoning: ${usage.completion_tokens_details?.reasoning_tokens ?? "?"}), cost: $${costUsd ?? "?"}`
+    );
   }
   if (runId && usage) {
     await logPipelineEvent(runId, "ai_cost", {
@@ -244,8 +312,9 @@ export async function generateArticle(
       model: ARTICLE_MODEL,
       prompt_tokens: usage.prompt_tokens,
       completion_tokens: usage.completion_tokens,
+      reasoning_tokens: usage.completion_tokens_details?.reasoning_tokens,
       total_tokens: usage.total_tokens,
-      cost_usd: usage.total_cost,
+      cost_usd: costUsd,
       title: topic,
     });
   }
@@ -262,17 +331,22 @@ export async function generateArticle(
   const content = polishTypography(
     sanitizeInternalLinks(normalizeMarkdown(meta._content), allowedSlugs)
   );
-  const excerpt = meta.excerpt
-    ? polishTypography(meta.excerpt)
-    : content.slice(0, 200);
-  const title = meta.title ? polishTypography(meta.title) : topic;
+  const excerpt = polishTypography(
+    typeof meta.excerpt === "string" && meta.excerpt.trim() ? meta.excerpt.trim() : fallbackExcerpt(content)
+  );
+  const title = typeof meta.title === "string" && meta.title.trim() ? polishTypography(meta.title.trim()) : topic;
+
+  const { category, valid } = normalizeCategory(meta.category, fallbackCategory);
+  if (!valid) {
+    console.warn(`[Writer] Kategoria spoza katalogu (${String(meta.category)}) → fallback "${category}"`);
+  }
 
   return {
     content,
     title,
     excerpt,
-    category: meta.category || "modele-ai",
-    tags: meta.tags || [],
-    reading_time: meta.reading_time || Math.ceil(content.split(/\s+/).length / 200),
+    category,
+    tags: Array.isArray(meta.tags) ? meta.tags.filter((t): t is string => typeof t === "string") : [],
+    reading_time: Math.max(1, Math.round(countWords(content) / WORDS_PER_MINUTE)),
   };
 }

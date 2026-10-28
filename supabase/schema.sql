@@ -70,14 +70,8 @@ CREATE TABLE IF NOT EXISTS scraped_items (
   is_processed BOOLEAN DEFAULT false
 );
 
--- Subskrybenci newslettera. Celowo brak public policy — zapis i odczyt
--- wyłącznie przez service role key (admin client w /api/newsletter).
-CREATE TABLE IF NOT EXISTS newsletter_subscribers (
-  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  email TEXT NOT NULL UNIQUE,
-  subscribed_at TIMESTAMPTZ DEFAULT now(),
-  unsubscribed_at TIMESTAMPTZ
-);
+-- Newsletter: adresy subskrybentów trzyma WYŁĄCZNIE MailerLite (double
+-- opt-in, zgody, wypisy) — baza celowo nie ma tabeli z e-mailami.
 
 -- Telemetria pipeline'u (P1-5) — zdarzenia z każdego cron run'u (start, end,
 -- scrape skips, AI refusals, quality rejects, koszty). Czytane przez
@@ -105,6 +99,12 @@ CREATE INDEX IF NOT EXISTS idx_articles_published
 -- Hot path: artykuły danej kategorii (category page + grouped home).
 CREATE INDEX IF NOT EXISTS idx_articles_category ON articles(category_id);
 
+-- Listy kategorii: WHERE is_published AND category_id = ? ORDER BY
+-- published_at DESC, id DESC — częściowy indeks złożony (migracja 006).
+CREATE INDEX IF NOT EXISTS idx_articles_category_published
+  ON articles (category_id, published_at DESC, id DESC)
+  WHERE is_published;
+
 -- Hot path: featured sekcje na home.
 CREATE INDEX IF NOT EXISTS idx_articles_featured
   ON articles(is_featured, published_at DESC);
@@ -112,7 +112,8 @@ CREATE INDEX IF NOT EXISTS idx_articles_featured
 -- Full-text search dla `searchArticles` (migracja 004). STORED computed
 -- column = wartość przechowywana, indeks GIN aktualizowany automatycznie
 -- przy każdym INSERT/UPDATE artykułu. Wagi: title=A (najwyższa), excerpt=B.
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
+-- pg_trgm w schemacie `extensions` (konwencja Supabase — nie w `public`).
+CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA extensions;
 
 ALTER TABLE articles
   ADD COLUMN IF NOT EXISTS search_vector tsvector
@@ -124,10 +125,10 @@ ALTER TABLE articles
 CREATE INDEX IF NOT EXISTS idx_articles_fts
   ON articles USING GIN (search_vector);
 
--- Trigram fallback — znajduje literówki ("openi" → "openai") gdy tsquery
--- zwróci 0 wyników. Aplikacja używa tego przez `.ilike` po pustym FTS.
+-- Trigram — indeks pod fallback `.ilike '%fraza%'` na tytułach, gdy FTS
+-- zwróci 0 wyników (fraza w środku wyrazu, interpunkcja).
 CREATE INDEX IF NOT EXISTS idx_articles_title_trgm
-  ON articles USING GIN (title gin_trgm_ops);
+  ON articles USING GIN (title extensions.gin_trgm_ops);
 
 -- Pipeline dedup — lookup przed wstawieniem.
 CREATE INDEX IF NOT EXISTS idx_scraped_items_url ON scraped_items(source_url);
@@ -150,8 +151,11 @@ CREATE INDEX IF NOT EXISTS idx_pipeline_events_event
 -- sitemap.ts (lastModified) i JSON-LD (dateModified). Zmiana flag
 -- (is_featured, is_published) NIE podbija daty — Google dewaluuje
 -- date-bumping bez realnej zmiany treści (migracja 005).
+-- `SET search_path = ''` — stała ścieżka wyszukiwania (migracja 007).
 CREATE OR REPLACE FUNCTION set_updated_at()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER
+SET search_path = ''
+AS $$
 BEGIN
   IF NEW.title IS DISTINCT FROM OLD.title
      OR NEW.content IS DISTINCT FROM OLD.content
@@ -180,7 +184,6 @@ ALTER TABLE categories ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tags ENABLE ROW LEVEL SECURITY;
 ALTER TABLE article_tags ENABLE ROW LEVEL SECURITY;
 ALTER TABLE scraped_items ENABLE ROW LEVEL SECURITY;
-ALTER TABLE newsletter_subscribers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pipeline_events ENABLE ROW LEVEL SECURITY;
 
 -- Public SELECT policies. CREATE POLICY nie ma IF NOT EXISTS, więc najpierw
@@ -202,23 +205,29 @@ DROP POLICY IF EXISTS "Public read article_tags" ON article_tags;
 CREATE POLICY "Public read article_tags" ON article_tags
   FOR SELECT USING (true);
 
--- scraped_items, newsletter_subscribers i pipeline_events celowo BEZ public
--- policy — zapis i odczyt tylko przez service role key.
+-- scraped_items i pipeline_events celowo BEZ public policy — zapis i odczyt
+-- tylko przez service role key.
 
 -- =============================================================================
 -- RPC (stored functions)
 -- =============================================================================
 
--- Agreguje top N tagów po użyciu (server-side GROUP BY). Używane przez
--- getPopularTags() w src/lib/data.ts zamiast pobierania całej article_tags
--- do JS. `STABLE` — wynik zależy tylko od tabel, cacheable w obrębie query.
+-- Agreguje top N tagów po użyciu (server-side GROUP BY) — wyłącznie
+-- z OPUBLIKOWANYCH artykułów (migracja 006). Używane przez getPopularTags()
+-- w src/lib/data.ts (pasek "Trendy" + katalog tagów w prompcie pipeline'u).
+-- `STABLE` — wynik zależy tylko od tabel, cacheable w obrębie query.
+-- SECURITY INVOKER (domyślnie) — RLS obowiązuje także wewnątrz funkcji.
 CREATE OR REPLACE FUNCTION popular_tags(tag_limit INT)
-RETURNS TABLE (id UUID, name TEXT, slug TEXT, count BIGINT) AS $$
+RETURNS TABLE (id UUID, name TEXT, slug TEXT, count BIGINT)
+SET search_path = ''
+AS $$
   SELECT t.id, t.name, t.slug, COUNT(*) AS count
-  FROM article_tags at
-  JOIN tags t ON at.tag_id = t.id
+  FROM public.article_tags at
+  JOIN public.tags t ON at.tag_id = t.id
+  JOIN public.articles a ON a.id = at.article_id
+  WHERE a.is_published
   GROUP BY t.id, t.name, t.slug
-  ORDER BY count DESC
+  ORDER BY count DESC, t.name ASC
   LIMIT tag_limit;
 $$ LANGUAGE SQL STABLE;
 

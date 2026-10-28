@@ -28,8 +28,12 @@ interface PageProps {
 export async function generateMetadata({ params, searchParams }: PageProps): Promise<Metadata> {
   const [{ slug }, { page: pageParam }] = await Promise.all([params, searchParams]);
   const pageNum = Math.max(1, parseInt(pageParam || "1", 10) || 1);
-  const tag = await getTagBySlug(slug);
+  const [tag, paginated] = await Promise.all([
+    getTagBySlug(slug),
+    getArticlesByTagPaginated(slug, PAGE_SIZE, pageNum),
+  ]);
   if (!tag) return notFoundMetadata("Tag nie znaleziony");
+  if (paginated.articles.length === 0 && pageNum > 1) return notFoundMetadata("Strona nie istnieje");
   return tagMetadata(tag, pageNum);
 }
 

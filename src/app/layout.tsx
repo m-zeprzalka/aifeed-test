@@ -8,8 +8,9 @@ import { ThemeFavicon } from "@/components/layout/theme-favicon";
 import { CategoryBar } from "@/components/articles/category-bar";
 import { ThemeProvider } from "@/components/theme-provider";
 import { siteConfig } from "@/config/site";
-import { getCategories, getTickerArticles } from "@/lib/data";
+import { getTickerArticles } from "@/lib/data";
 import { jsonLdScript } from "@/lib/jsonld";
+import { organizationJsonLd } from "@/lib/seo";
 import { cn } from "@/lib/utils";
 import { GoogleAnalytics } from "@next/third-parties/google";
 import { Analytics } from "@vercel/analytics/next";
@@ -110,59 +111,22 @@ export const viewport: Viewport = {
   ],
 };
 
-// Origin Supabase Storage pobrany z env. `null` gdy brak zmiennej (lokalny
-// dev bez supabase) — preconnect jest wtedy pomijany w <head> niżej.
-const supabaseOrigin = (() => {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  if (!url) return null;
-  try {
-    return new URL(url).origin;
-  } catch {
-    return null;
-  }
-})();
-
 // Module-level constant — derived purely from `siteConfig`, no per-request
-// state. `sameAs` is intentionally omitted: it should only list verified,
-// owned social profiles (none yet). Pointing schema.org at 404s damages
-// structured-data trust signals — Google flags it.
-//
-// `NewsMediaOrganization` (podklasa Organization) + linki do polityk
-// redakcyjnych — sygnały E-E-A-T dla wydawcy newsowego. Kotwice wskazują
-// realne sekcje na /o-serwisie (strona transparentności); jeśli zmieniasz
-// tam `id`, zaktualizuj też te URL-e.
-const ORGANIZATION_JSON_LD = {
-  "@context": "https://schema.org",
-  "@type": "NewsMediaOrganization",
-  name: siteConfig.name,
-  url: siteConfig.url,
-  logo: `${siteConfig.url}/icon-512.png`,
-  description: siteConfig.description,
-  publishingPrinciples: `${siteConfig.url}/o-serwisie#jak-powstaja-teksty`,
-  correctionsPolicy: `${siteConfig.url}/o-serwisie#zglos-blad`,
-  actionableFeedbackPolicy: `${siteConfig.url}/o-serwisie#zglos-blad`,
-  // Imienny założyciel (decyzja 2026-08-11) — ta sama encja co Person na
-  // /redakcja i author w NewsArticle. Spójność encji > liczba pól.
-  founder: {
-    "@type": "Person",
-    name: siteConfig.author.name,
-    url: `${siteConfig.url}/redakcja`,
-    sameAs: siteConfig.author.sameAs,
-  },
-} as const;
+// state. Pełny opis wydawcy (NewsMediaOrganization z `@id`, politykami
+// redakcyjnymi i założycielem) buduje `organizationJsonLd()` w lib/seo.ts —
+// artykuły i WebSite odwołują się do tej samej encji po `@id`.
+const ORGANIZATION_JSON_LD = organizationJsonLd();
 
 export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const [tickerItems, categories] = await Promise.all([
-    // 20 unikatów — marquee renderuje pojedynczy DOM (bez duplikacji), więc
-    // im więcej items, tym dłuższy cykl. Ale każdy item to dodatkowy <Link>
-    // w SSR HTML i w bundlu wysyłanym do klienta, stąd cap na 20.
-    getTickerArticles(20),
-    getCategories(),
-  ]);
+  // 20 unikatów — każdy item to dodatkowy <Link> w SSR HTML i w propsach
+  // client componentu, stąd cap. Kategorie NIE są pobierane z bazy:
+  // CategoryBar czyta `siteConfig.categories` (ta sama lista i kolejność co
+  // menu mobilne, stopka i sekcje home; jedno zapytanie mniej na render).
+  const tickerItems = await getTickerArticles(20);
 
   return (
     <html
@@ -171,15 +135,10 @@ export default async function RootLayout({
       suppressHydrationWarning
     >
       <head>
-        {/* Preconnect to Supabase Storage — every article hero image hits this
-            host. Saves DNS + TLS handshake on the LCP image. Host pobierany
-            z `NEXT_PUBLIC_SUPABASE_URL` (nigdy nie hardcoded — zob. P0-1
-            w AUDIT.md). Bez zmiennej preconnect jest pomijany. preconnect
-            alone wystarczy w nowoczesnych przeglądarkach (Chrome/Firefox/
-            Safari/Edge od ~2017); dns-prefetch fallback ze starszych poradników
-            jest dziś zbędny. */}
-        {supabaseOrigin && <link rel="preconnect" href={supabaseOrigin} />}
-
+        {/* Bez preconnect do Supabase: przeglądarka nigdy nie łączy się
+            z bazą ani Storage bezpośrednio — nasze miniatury idą przez
+            /_next/image (ta sama domena), wyszukiwarka przez /api/search.
+            Preconnect zużywał handshake TLS na każdej stronie na darmo. */}
         {/* Favicon SVG (auto light/dark przez media query w środku pliku).
             Ręczny <link> zamiast file-convention: /icon.svg to route handler
             (zob. src/app/icon.svg/route.ts), więc Next nie doda linku sam.
@@ -187,7 +146,6 @@ export default async function RootLayout({
             przeglądarek i Safari. Po hydratacji ThemeFavicon (niżej) dokleja
             własny link zsynchronizowany z przełącznikiem motywu. */}
         <link rel="icon" type="image/svg+xml" href="/icon.svg" />
-
 
         <script
           type="application/ld+json"
@@ -220,7 +178,7 @@ export default async function RootLayout({
           <ThemeFavicon />
           <NewsTicker items={tickerItems} />
           <Header />
-          <CategoryBar categories={categories} />
+          <CategoryBar />
           <main id="main-content" className="flex-1">{children}</main>
           <Footer />
           <ScrollToTop />

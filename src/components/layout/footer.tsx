@@ -91,7 +91,7 @@ export function Footer() {
               Bądź na bieżąco
             </h3>
             <p className="text-sm text-muted-foreground mb-4">
-              Odbieraj najnowsze wieści o AI każdego dnia.
+              Najważniejsze wieści ze świata AI — prosto na Twoją skrzynkę.
             </p>
             <NewsletterForm variant="compact" />
           </div>

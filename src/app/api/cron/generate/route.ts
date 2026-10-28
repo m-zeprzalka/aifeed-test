@@ -1,14 +1,16 @@
 import { NextRequest } from "next/server";
 import { scrapeAllFeeds, selectTopArticles, findRelatedItems, type ScrapedArticle } from "@/lib/scraper/parser";
-import { scrapeArticleContent } from "@/lib/scraper/content";
+import { scrapeSourcePage } from "@/lib/scraper/content";
 import { generateArticle } from "@/lib/ai/writer";
-import { assessArticleQuality } from "@/lib/ai/quality";
+import { assessArticleQuality, countWords, isLikelyRefusal, QUALITY_PUBLISH_THRESHOLD } from "@/lib/ai/quality";
+import { normalizeTagCandidates, selectTags, tagSlug } from "@/lib/ai/tags";
 import { getArticleThumbnail } from "@/lib/images/generator";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getPopularTags } from "@/lib/data";
 import { logPipelineEvent, newRunId } from "@/lib/telemetry";
 import { pingIndexNow } from "@/lib/indexnow";
-import { siteConfig } from "@/config/site";
+import { safeEqual } from "@/lib/admin-auth";
+import { siteConfig, isCategorySlug, type CategorySlug } from "@/config/site";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import slugify from "slugify";
 
@@ -16,22 +18,36 @@ export const maxDuration = 300;
 export const dynamic = "force-dynamic";
 
 // Vercel Hobby max function duration = 300s. Per-artykuł budget w worst case
-// (scrape 15s + AI 90s + thumbnail og 10s lub AI 90s + DB ops) potrafi sięgać
-// 200s. Bez time-budget guard pętla potrafi zostać cięta w połowie iteracji,
+// (scrape 15s + AI 120s + thumbnail AI 90s + DB ops) potrafi sięgać ~230s.
+// Bez time-budget guard pętla potrafi zostać cięta w połowie iteracji,
 // zostawiając stan w nieprzewidywalnym miejscu (insert mógł przejść, ale
-// upsert tagów już nie). Po przekroczeniu BUDGET_MS przerywamy pętlę
-// gracefully — pozostałe items lądują w `aborted[]` w response, a `scraped_items`
-// dla nich NIE są oznaczone jako processed (retry w następnym cronie).
+// tagi już nie). Po przekroczeniu BUDGET_MS przerywamy pętlę gracefully —
+// pozostałe items lądują w `aborted[]`, a ich `scraped_items` NIE są
+// oznaczone jako processed (retry w następnym cronie).
 //
-// Bufor 30s (300 - 270) zostaje na: ostatni insert + final response stringify
-// + serverless cold-finish.
+// Bufor 30s (300 - 270) zostaje na: ostatni insert + IndexNow + response.
 const PIPELINE_BUDGET_MS = 270_000;
+// Twardy termin dla pojedynczych wywołań AI (artykuł, miniatura) liczony od
+// startu runu: 300 s limitu − 15 s na insert, IndexNow i telemetrię końcową.
+const AI_DEADLINE_MS = 285_000;
+
+// Budżet tekstu źródeł w prompcie. Główne źródło ~12k znaków (~3k tokenów):
+// przy targecie 700-1200 słów stare 6k ucinało bogate materiały w połowie
+// (koszt +~$0.003/artykuł). Źródła dodatkowe krócej — uzupełniają fakty.
+const MAIN_SOURCE_CHARS = 12_000;
+const RELATED_SOURCE_CHARS = 5_000;
+const MIN_MAIN_SOURCE_CHARS = 100;
+const MIN_RELATED_SOURCE_CHARS = 300;
+
+const QUALITY_FEATURED_THRESHOLD = 80;
+
+type Supabase = SupabaseClient;
 
 /**
  * Generate a unique slug for the article. Prefers a clean, human-readable slug;
  * falls back to a short timestamp suffix only when the base slug collides.
  */
-async function buildUniqueSlug(supabase: SupabaseClient, title: string): Promise<string> {
+async function buildUniqueSlug(supabase: Supabase, title: string): Promise<string> {
   const base = slugify(title, { lower: true, strict: true, locale: "pl" }).slice(0, 80) || "artykul";
 
   for (let attempt = 0; attempt < 5; attempt++) {
@@ -43,11 +59,80 @@ async function buildUniqueSlug(supabase: SupabaseClient, title: string): Promise
   return `${base}-${Date.now().toString(36)}`;
 }
 
+/**
+ * Oznacza URL-e źródeł jako przetworzone (jeden batch upsert). Dedup
+ * pipeline'u stoi na `scraped_items.source_url` UNIQUE — oznaczony URL nie
+ * wróci w kolejnych runach.
+ */
+async function markProcessed(supabase: Supabase, items: ScrapedArticle[]): Promise<void> {
+  if (items.length === 0) return;
+  const { error } = await supabase.from("scraped_items").upsert(
+    items.map((item) => ({
+      source_url: item.url,
+      title: item.title,
+      description: item.description,
+      source_name: item.sourceName,
+      is_processed: true,
+    })),
+    { onConflict: "source_url" }
+  );
+  if (error) console.error(`[Pipeline] markProcessed failed: ${error.message}`);
+}
+
+/**
+ * Tagi artykułu wg dyscypliny z `selectTags` (lib/ai/tags.ts): istniejące
+ * linkujemy po id (bez przemianowywania), nowy (maks. 1) tworzymy
+ * idempotentnie, a powiązania wstawiamy jednym batchem.
+ */
+async function attachArticleTags(
+  supabase: Supabase,
+  articleId: string,
+  aiTags: string[],
+  catalogSlugs: ReadonlySet<string>
+): Promise<{ linked: number; dropped: string[] }> {
+  const candidates = normalizeTagCandidates(aiTags);
+  if (candidates.length === 0) return { linked: 0, dropped: [] };
+
+  const { data: existingRows, error: lookupError } = await supabase
+    .from("tags")
+    .select("id, slug")
+    .in("slug", candidates.map((c) => c.slug));
+  if (lookupError) {
+    console.error(`[Tags] lookup failed: ${lookupError.message}`);
+    return { linked: 0, dropped: [] };
+  }
+  const existingBySlug = new Map((existingRows ?? []).map((r: { id: string; slug: string }) => [r.slug, r]));
+  const selection = selectTags(candidates, catalogSlugs, existingBySlug);
+
+  const tagIds = selection.existing.map((t) => t.id);
+  for (const fresh of selection.create) {
+    // `ignoreDuplicates` — równoległy run mógł właśnie utworzyć ten slug;
+    // wtedy dociągamy istniejące id zamiast nadpisywać nazwę.
+    await supabase.from("tags").upsert({ name: fresh.name, slug: fresh.slug }, { onConflict: "slug", ignoreDuplicates: true });
+    const { data: row } = await supabase.from("tags").select("id").eq("slug", fresh.slug).maybeSingle();
+    if (row?.id) tagIds.push(row.id);
+  }
+
+  if (tagIds.length > 0) {
+    const { error } = await supabase.from("article_tags").upsert(
+      tagIds.map((tagId) => ({ article_id: articleId, tag_id: tagId })),
+      { onConflict: "article_id,tag_id", ignoreDuplicates: true }
+    );
+    if (error) console.error(`[Tags] link failed: ${error.message}`);
+  }
+  if (selection.dropped.length > 0) {
+    console.warn(`[Tags] Wycięto ${selection.dropped.length} nowych tagów: ${selection.dropped.join(", ")}`);
+  }
+  return { linked: tagIds.length, dropped: selection.dropped };
+}
+
 async function runPipeline(request: NextRequest) {
   const authHeader = request.headers.get("authorization");
   const cronSecret = process.env.CRON_SECRET;
 
-  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
+  // Fail-closed: brak CRON_SECRET = 401 (nigdy "bypass dla dev").
+  // Porównanie stałoczasowe (wspólne z Basic Auth admina).
+  if (!cronSecret || !authHeader || !(await safeEqual(authHeader, `Bearer ${cronSecret}`))) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -124,20 +209,18 @@ async function runPipeline(request: NextRequest) {
     const failed: { title: string; reason: string }[] = [];
     const aborted: string[] = [];
 
-    // Editorial featured-article gating: at most ONE featured per UTC day, and
-    // only when the AI quality score is ≥ 80 (excellent, not just passing).
-    // Without these guards `is_featured` flips on every cron run and pollutes
-    // sitemap priority signals + the "wyróżniony" hero on the home page.
     // Katalog popularnych tagów — raz na run, przekazywany do promptu, żeby
-    // AI wybierało z istniejącej taksonomii zamiast płodzić warianty pisowni
-    // (root cause rozdrobnienia katalogu: ~73% tagów z 1 artykułem).
+    // AI wybierało z istniejącej taksonomii zamiast płodzić warianty pisowni.
     // Przez getPopularTags (lib/data), nie surowe RPC: gdy `popular_tags`
-    // nie istnieje w bazie (stan produkcji 2026-08-12, migracja 001
-    // niezaaplikowana), surowe RPC zwracało błąd i prompt dostawał PUSTY
-    // katalog w każdym runie — getPopularTags ma paginowany fallback.
-    const existingTags: string[] = (await getPopularTags(100))
-      .map((t) => t.name)
-      .filter(Boolean);
+    // nie istnieje w bazie (migracja 001), surowe RPC dawało PUSTY katalog —
+    // getPopularTags ma paginowany fallback.
+    const catalogTags = await getPopularTags(100);
+    const existingTags = catalogTags.map((t) => t.name).filter(Boolean);
+    const catalogSlugs = new Set(catalogTags.map((t) => t.slug || tagSlug(t.name)));
+
+    // Mapa kategorii slug → id raz na run (wcześniej SELECT na każdy artykuł).
+    const { data: categoryRows } = await supabase.from("categories").select("id, slug");
+    const categoryIdBySlug = new Map((categoryRows ?? []).map((c: { id: string; slug: string }) => [c.slug, c.id]));
 
     // Kandydaci do linkowania wewnętrznego — 40 ostatnich opublikowanych
     // artykułów (tytuł + slug). AI wplata 1-3 kontekstowe linki wyłącznie z
@@ -154,6 +237,8 @@ async function runPipeline(request: NextRequest) {
       recentArticleRows || []
     ).filter((r): r is { title: string; slug: string } => Boolean(r.title && r.slug));
 
+    const deadline = runStartedAt + AI_DEADLINE_MS;
+
     // URL-e opublikowane w tym runie — po pętli lecą jednym pingiem do
     // IndexNow (fail-soft; Google nie wspiera, Bing/Copilot tak).
     const publishedUrls: string[] = [];
@@ -162,7 +247,8 @@ async function runPipeline(request: NextRequest) {
     // syntez) — pula kandydatów do multi-source nie może ich używać ponownie.
     const usedSourceUrls = new Set(topItems.map((t) => t.url));
 
-    const QUALITY_FEATURED_THRESHOLD = 80;
+    // Editorial featured-article gating: at most ONE featured per UTC day, and
+    // only when the AI quality score is ≥ 80 (excellent, not just passing).
     const startOfTodayUtc = new Date();
     startOfTodayUtc.setUTCHours(0, 0, 0, 0);
     const { count: featuredToday } = await supabase
@@ -190,33 +276,34 @@ async function runPipeline(request: NextRequest) {
       try {
         console.log(`Generating article for: ${item.title}`);
 
-        // Scrape full source content for faithful adaptation
-        const sourceContent = await scrapeArticleContent(item.url);
+        // JEDNO pobranie strony źródłowej: treść dla AI + og:image/og:site_name
+        // dla miniatury (wcześniej dwa osobne żądania do tej samej strony).
+        const sourcePage = await scrapeSourcePage(item.url, MAIN_SOURCE_CHARS);
+        const sourceContent = sourcePage.text;
         console.log(`[Source content] ${sourceContent.length} chars from ${item.url}`);
 
-        if (sourceContent.length < 100) {
-          console.warn(`[Pipeline] Skipping "${item.title}" — source content too short or unreadable`);
+        if (sourceContent.length < MIN_MAIN_SOURCE_CHARS) {
+          console.warn(`[Pipeline] Skipping "${item.title}" — ${sourcePage.failure ?? "source content too short"}`);
           failed.push({ title: item.title, reason: "source-too-short" });
           await logPipelineEvent(runId, "scrape_skip", {
             title: item.title,
             url: item.url,
             source_name: item.sourceName,
             content_length: sourceContent.length,
+            // Przyczyna (http-403, content-type, too-short…) — bez niej nie dało
+            // się zdiagnozować np. stałych porażek Spider's Web z Vercela.
+            reason: sourcePage.failure,
           });
           // Still mark as processed so we don't retry bad URLs
-          await supabase.from("scraped_items").upsert(
-            { source_url: item.url, title: item.title, description: item.description, source_name: item.sourceName, is_processed: true },
-            { onConflict: "source_url" }
-          );
+          await markProcessed(supabase, [item]);
           continue;
         }
 
         // ===== Multi-source synthesis (information gain) =====
         // Szukamy w świeżej puli doniesień o TYM SAMYM wydarzeniu z innych
         // outletów i dodajemy ich treść do promptu. Artykuł-synteza zawiera
-        // więcej niż jakiekolwiek pojedyncze źródło — to jest dokładnie
-        // "information gain", dominujący sygnał jakości po marcowym Core
-        // Update 2026. Maks. 2 dodatkowe źródła (budżet czasowy scrape'ów).
+        // więcej niż jakiekolwiek pojedyncze źródło — "information gain",
+        // dominujący sygnał jakości po marcowym Core Update 2026.
         const sourceUrls = [item.url];
         const sourceTitles = [item.sourceName];
         const sourceDescriptions = [item.description];
@@ -229,11 +316,11 @@ async function runPipeline(request: NextRequest) {
           2
         );
         for (const rel of relatedCandidates) {
-          const relContent = await scrapeArticleContent(rel.url);
+          const relPage = await scrapeSourcePage(rel.url, RELATED_SOURCE_CHARS);
           // Za krótkie źródło dodatkowe nic nie wnosi — pomijamy bez oznaczania
           // jako processed (może być głównym tematem w kolejnym runie).
-          if (relContent.length < 300) continue;
-          combinedContent += `\n\n===== ŹRÓDŁO DODATKOWE (${rel.sourceName}) — "${rel.title}" =====\n${relContent}`;
+          if (relPage.text.length < MIN_RELATED_SOURCE_CHARS) continue;
+          combinedContent += `\n\n===== ŹRÓDŁO DODATKOWE (${rel.sourceName}) — "${rel.title}" =====\n${relPage.text}`;
           sourceUrls.push(rel.url);
           sourceTitles.push(rel.sourceName);
           sourceDescriptions.push(rel.description);
@@ -244,24 +331,30 @@ async function runPipeline(request: NextRequest) {
           console.log(`[Multi-source] "${item.title}" + ${mergedItems.length} źródła: ${mergedItems.map((m) => m.sourceName).join(", ")}`);
         }
 
-        const article = await generateArticle(item.title, sourceUrls, sourceDescriptions, combinedContent, runId, existingTags, internalLinkCandidates);
+        const fallbackCategory: CategorySlug = isCategorySlug(item.category) ? item.category : "modele-ai";
+        const article = await generateArticle({
+          topic: item.title,
+          sourceUrls,
+          sourceDescriptions,
+          sourceContent: combinedContent,
+          fallbackCategory,
+          runId,
+          existingTags,
+          internalLinkCandidates,
+          deadline,
+        });
 
         // Validate AI response — reject refusals and garbage
-        const refusalPatterns = ["nie można przetworzyć", "nie mogę", "brak treści", "brak czytelnej"];
-        const isRefusal = refusalPatterns.some((p) => article.content.toLowerCase().includes(p));
-
-        if (isRefusal) {
+        if (isLikelyRefusal(article.content)) {
           console.warn(`[Pipeline] AI refused for "${item.title}", skipping`);
           failed.push({ title: item.title, reason: "ai-refusal" });
           await logPipelineEvent(runId, "ai_refusal", {
             title: item.title,
             url: item.url,
             source_name: item.sourceName,
+            opening: article.content.slice(0, 200),
           });
-          await supabase.from("scraped_items").upsert(
-            { source_url: item.url, title: item.title, description: item.description, source_name: item.sourceName, is_processed: true },
-            { onConflict: "source_url" }
-          );
+          await markProcessed(supabase, [item]);
           continue;
         }
 
@@ -269,7 +362,7 @@ async function runPipeline(request: NextRequest) {
         const quality = assessArticleQuality(article);
         console.log(`[Quality] "${article.title}" — score: ${quality.score}/100${quality.issues.length > 0 ? `, issues: ${quality.issues.join(", ")}` : ""}`);
 
-        if (quality.score < 50) {
+        if (quality.score < QUALITY_PUBLISH_THRESHOLD) {
           console.warn(`[Pipeline] Rejecting "${article.title}" — quality score ${quality.score}/100: ${quality.issues.join(", ")}`);
           rejected.push(article.title);
           await logPipelineEvent(runId, "quality_reject", {
@@ -279,23 +372,17 @@ async function runPipeline(request: NextRequest) {
             score: quality.score,
             issues: quality.issues,
           });
-          await supabase.from("scraped_items").upsert(
-            { source_url: item.url, title: item.title, description: item.description, source_name: item.sourceName, is_processed: true },
-            { onConflict: "source_url" }
-          );
+          await markProcessed(supabase, [item]);
           continue;
         }
 
-        const thumbnail = await getArticleThumbnail(article.title, item.url, runId);
+        const thumbnail = await getArticleThumbnail(
+          article.title,
+          { sourceUrl: item.url, ogImage: sourcePage.ogImage, siteName: sourcePage.siteName },
+          { runId, deadline }
+        );
 
         const slug = await buildUniqueSlug(supabase, article.title);
-
-        // Find category
-        const { data: category } = await supabase
-          .from("categories")
-          .select("id")
-          .eq("slug", article.category)
-          .maybeSingle();
 
         // Featured only when this article is excellent AND we haven't featured
         // anything else today yet. We flip the per-run flag eagerly so a second
@@ -311,7 +398,7 @@ async function runPipeline(request: NextRequest) {
             slug,
             excerpt: article.excerpt,
             content: article.content,
-            category_id: category?.id || null,
+            category_id: categoryIdBySlug.get(article.category) ?? null,
             thumbnail_url: thumbnail.url || null,
             thumbnail_source: thumbnail.source,
             source_urls: sourceUrls,
@@ -337,92 +424,16 @@ async function runPipeline(request: NextRequest) {
           continue;
         }
 
-        // Mark source as processed NATYCHMIAST po udanym insercie artykułu —
-        // zanim ruszą tagi. Gdy funkcja padnie (wyjątek / ścięcie na 300s)
-        // między insertem a tym upsertem, następny cron widziałby URL jako
-        // "nowy" i opublikował duplikat. Ta kolejność zwęża okno duplikacji
-        // z sekund (pętla tagów) do pojedynczego round-tripu.
-        await supabase.from("scraped_items").upsert(
-          {
-            source_url: item.url,
-            title: item.title,
-            description: item.description,
-            source_name: item.sourceName,
-            is_processed: true,
-          },
-          { onConflict: "source_url" }
-        );
+        // KOLEJNOŚĆ ZAPISÓW (niezmiennik): INSERT artykułu → NATYCHMIAST
+        // oznaczenie źródeł jako przetworzonych → dopiero tagi. Gdy funkcja
+        // padnie (wyjątek / ścięcie na 300s) między insertem a tym upsertem,
+        // następny cron widziałby URL jako "nowy" i opublikował duplikat.
+        // Źródła dołączone do syntezy idą w tym samym batchu — ich treść JEST
+        // w opublikowanym artykule; osobny artykuł z tego doniesienia byłby
+        // duplikatem. Jeden round-trip zamiast 1 + N.
+        await markProcessed(supabase, [item, ...mergedItems]);
 
-        // Źródła dołączone do syntezy też oznaczamy jako przetworzone — ich
-        // treść JEST w opublikowanym artykule; osobny artykuł z tego samego
-        // doniesienia byłby duplikatem.
-        await Promise.all(
-          mergedItems.map((rel) =>
-            supabase.from("scraped_items").upsert(
-              {
-                source_url: rel.url,
-                title: rel.title,
-                description: rel.description,
-                source_name: rel.sourceName,
-                is_processed: true,
-              },
-              { onConflict: "source_url" }
-            )
-          )
-        );
-
-        // Dyscyplina tagów egzekwowana w kodzie (prompt tylko prosi):
-        // 1) tagi z katalogu top-100 przechodzą,
-        // 2) tagi spoza listy, ale ISTNIEJĄCE już w bazie (katalog ma ~2,5k
-        //    pozycji) — też przechodzą (bogatsze tagowanie bez tworzenia
-        //    nowych bytów; pierwsza, zbyt wąska wersja przycinała wszystko
-        //    spoza top-60 i artykuły kończyły z jednym tagiem),
-        // 3) tagi CAŁKIEM nowe — wchodzi maksymalnie JEDEN (nowa encja).
-        // Łącznie max 5.
-        const catalogLower = new Set(existingTags.map((t) => t.toLowerCase()));
-        const inCatalog = article.tags.filter((t) => catalogLower.has(t.toLowerCase()));
-        const outOfCatalog = article.tags.filter((t) => !catalogLower.has(t.toLowerCase()));
-        let knownInDb: string[] = [];
-        let brandNew: string[] = [];
-        if (outOfCatalog.length > 0) {
-          const bySlug = outOfCatalog.map((name) => ({
-            name,
-            slug: slugify(name, { lower: true, strict: true, locale: "pl" }),
-          }));
-          const { data: existingTagRows } = await supabase
-            .from("tags")
-            .select("slug")
-            .in("slug", bySlug.map((b) => b.slug));
-          const existingSlugs = new Set((existingTagRows || []).map((r: { slug: string }) => r.slug));
-          knownInDb = bySlug.filter((b) => existingSlugs.has(b.slug)).map((b) => b.name);
-          brandNew = bySlug.filter((b) => !existingSlugs.has(b.slug)).map((b) => b.name);
-        }
-        const finalTags = [...inCatalog, ...knownInDb, ...brandNew.slice(0, 1)].slice(0, 5);
-        if (brandNew.length > 1) {
-          console.warn(`[Tags] Wycięto ${brandNew.length - 1} nowych tagów: ${brandNew.slice(1).join(", ")}`);
-        }
-
-        // Handle tags — upserts are independent per tag, run them in parallel.
-        await Promise.all(
-          finalTags.map(async (tagName) => {
-            const tagSlug = slugify(tagName, { lower: true, strict: true, locale: "pl" });
-
-            const { data: tag } = await supabase
-              .from("tags")
-              .upsert({ name: tagName, slug: tagSlug }, { onConflict: "slug" })
-              .select("id")
-              .single();
-
-            if (tag) {
-              await supabase
-                .from("article_tags")
-                .upsert(
-                  { article_id: insertedArticle.id, tag_id: tag.id },
-                  { onConflict: "article_id,tag_id" }
-                );
-            }
-          })
-        );
+        const tagResult = await attachArticleTags(supabase, insertedArticle.id, article.tags, catalogSlugs);
 
         generated.push(article.title);
         publishedUrls.push(`${siteConfig.url}/artykul/${slug}`);
@@ -440,7 +451,8 @@ async function runPipeline(request: NextRequest) {
           merged_sources: mergedItems.length,
           is_featured: shouldFeature,
           thumbnail_source: thumbnail.source ?? (thumbnail.url ? "ai-generated" : "none"),
-          word_count: article.content.split(/\s+/).filter(Boolean).length,
+          word_count: countWords(article.content),
+          tags_linked: tagResult.linked,
         });
       } catch (error) {
         console.error(`Failed to generate article for "${item.title}":`, error);
@@ -456,7 +468,7 @@ async function runPipeline(request: NextRequest) {
     }
 
     // IndexNow — jeden zbiorczy ping po całym runie. Fail-soft (log-only),
-    // nie liczy się do time budgetu w sposób istotny (timeout 10 s).
+    // timeout 10 s mieści się w buforze budżetu.
     await pingIndexNow(publishedUrls);
 
     const durationMs = Date.now() - runStartedAt;

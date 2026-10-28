@@ -1,64 +1,69 @@
-# Supabase — schemat i migracje
+# Supabase — schemat, migracje, diagnostyka
 
 ## Pliki
 
-- **`schema.sql`** — pełny schemat bazy danych (source of truth). Idempotentny, można re-runnać. Dla świeżej instalacji wystarczy raz uruchomić.
-- **`migrations/NNN_nazwa.sql`** — inkrementalne migracje dla baz, które już działają w produkcji. Każda aplikowana raz, po kolei.
+- **`schema.sql`** — pełny schemat bazy (źródło prawdy). Idempotentny, dla świeżej instalacji wystarczy raz uruchomić.
+- **`migrations/NNN_nazwa.sql`** — przyrostowe migracje dla działającej bazy. Wszystkie idempotentne; **uruchamiaj w kolejności numerów** (005 nadpisuje trigger z 002 — odwrotna kolejność cofnęłaby poprawkę `updated_at`; 007 musi iść po 005).
+- **`verify.sql`** — diagnostyka **tylko do odczytu**: lista elementów schematu z informacją, czy istnieją i która migracja je wprowadza. Bezpieczna na produkcji.
 
-## Dla świeżej instalacji (nowe DB)
+## Sprawdzenie stanu bazy (zawsze najpierw)
 
-1. Dashboard Supabase → **SQL Editor** → **New query**
-2. Wklej całą zawartość `schema.sql`
-3. **Run**
-4. Gotowe — tabele + RLS + RPC + seed kategorii.
-5. Opcjonalnie (storage bucket dla miniaturek): Storage → New bucket → name `thumbnails`, public ON, file size limit 10 MB. Można pominąć — kod pipeline tworzy bucket idempotentnie przy pierwszym uploadzie AI-image.
+Dashboard Supabase → **SQL Editor** → wklej `verify.sql` → **Run**. Każdy wiersz `ok = false` wskazuje migrację do uruchomienia.
 
-## Dla istniejących baz (upgrade path)
+> **Produkcja 2026-10-28, 18:23 UTC:** wgrane **001 → 007** jedną transakcją. Wcześniej brakowało 001, indeksu z 002, 004 i 006.
+>
+> Procedura:
+> 1. Pełny backup (`pg_dump` przez Supabase CLI) odtworzony testowo w kontenerze z identyczną wersją Postgresa.
+> 2. Migracje przetestowane na tej kopii, potem próba na produkcji z `ROLLBACK`.
+> 3. Wgranie na produkcję.
+>
+> Po migracji `verify.sql` = wszystko `true`. Liczby wierszy i suma kontrolna `updated_at` są identyczne jak przed migracją. Ostrzeżenia Supabase Security Advisor (WARN) = 0.
 
-Aplikuj po kolei migracje których jeszcze nie było w Twojej DB:
+## Świeża instalacja
+
+1. SQL Editor → wklej całe `schema.sql` → Run (tabele, indeksy, RLS, RPC, trigger, seed 6 kategorii).
+2. Opcjonalnie: Storage → New bucket `thumbnails` (public, limit 10 MB). Można pominąć — pipeline tworzy bucket przy pierwszym uploadzie.
+3. `verify.sql` → wszystkie wiersze `true`.
+
+## Istniejąca baza (upgrade)
 
 | Migracja | Co dodaje |
 |---|---|
-| `001_newsletter_and_popular_tags.sql` | Tabela `newsletter_subscribers` + RPC `popular_tags(tag_limit)` |
-| `002_updated_at_trigger_and_fk_index.sql` | Trigger `articles.updated_at` + indeks `article_tags(tag_id)` |
-| `003_pipeline_events.sql` | Tabela `pipeline_events` (telemetria pipeline'u, czytana przez `/admin` dashboard) + 2 indeksy + RLS service-role-only |
-| `004_articles_fts.sql` | `articles.search_vector` (STORED tsvector, wagi title/A + excerpt/B) + GIN index + trigram index `gin_trgm_ops` na title (fallback dla literówek). Postgres jednorazowo przegrzeje istniejące wpisy podczas aplikacji. |
-| `005_content_gated_updated_at.sql` | Trigger `updated_at` podbija datę TYLKO przy zmianie treści (title/content/excerpt/thumbnail) — zmiany flag nie fałszują `lastmod`/`dateModified` dla Google. Usuwa też zdublowany indeks `idx_articles_slug`. |
+| `001_newsletter_and_popular_tags.sql` | RPC `popular_tags(tag_limit)` (pierwotnie też tabela `newsletter_subscribers` — usunięta z migracji przed wdrożeniem; adresy trzyma wyłącznie MailerLite) |
+| `002_updated_at_trigger_and_fk_index.sql` | Trigger `articles.updated_at` (wersja podstawowa — doprecyzowana w 005) + indeks `article_tags(tag_id)` |
+| `003_pipeline_events.sql` | Tabela `pipeline_events` (telemetria pipeline'u dla `/admin`) + 2 indeksy + RLS service-role-only |
+| `004_articles_fts.sql` | `articles.search_vector` (STORED tsvector, config `simple`, wagi title/A + excerpt/B) + GIN + trigram na `title` (`pg_trgm` w schemacie `extensions`). Jednorazowo przelicza istniejące wiersze (~2 tys. — sekundy; bez triggerów, `updated_at` nietknięte) |
+| `005_content_gated_updated_at.sql` | Trigger `updated_at` podbija datę TYLKO przy zmianie treści (title/content/excerpt/thumbnail_url) — zmiany flag nie fałszują `lastmod`/`dateModified`. Usuwa zdublowany `idx_articles_slug` |
+| `006_listing_index_and_published_tags.sql` | Częściowy indeks `(category_id, published_at DESC, id DESC) WHERE is_published` pod listy kategorii + `popular_tags` liczy tylko opublikowane artykuły (stały `search_path`, nazwy kwalifikowane) |
+| `007_function_search_path.sql` | `set_updated_at()` ze stałym `search_path = ''` (Supabase advisor `function_search_path_mutable`) — po 005, bo `CREATE OR REPLACE` kasuje to ustawienie |
 
-Dla każdej: SQL Editor → New query → wklej → Run.
-
-Migracje są idempotentne (`CREATE … IF NOT EXISTS`, `CREATE OR REPLACE`, `DROP … IF EXISTS; CREATE …`), więc ponowne uruchomienie jest bezpieczne.
-
-## Weryfikacja po wdrożeniu
-
-```sql
--- Tabele
-SELECT table_name FROM information_schema.tables
-WHERE table_schema = 'public' ORDER BY table_name;
--- Expected: article_tags, articles, categories, newsletter_subscribers, pipeline_events, scraped_items, tags
-
--- RPC
-SELECT proname FROM pg_proc
-WHERE proname IN ('popular_tags', 'set_updated_at');
--- Expected: 2 rows
-
--- Trigger
-SELECT tgname FROM pg_trigger WHERE tgname = 'articles_set_updated_at';
--- Expected: 1 row
-
--- Indeksy
-SELECT indexname FROM pg_indexes
-WHERE schemaname = 'public' ORDER BY indexname;
--- Expected: idx_article_tags_tag_id + wszystkie idx_articles_* + idx_scraped_items_url + auto-indexy PK/UNIQUE
-
--- RPC działa
-SELECT * FROM popular_tags(10);
--- Expected: lista tagów posortowanych po count DESC (lub pusty wynik — też OK).
-```
+Dla każdej brakującej: SQL Editor → New query → wklej → Run. Ponowne uruchomienie już zaaplikowanej migracji jest bezpieczne (o ile zachowasz kolejność). Wszystkie migracje są addytywne — nie usuwają ani nie modyfikują danych artykułów.
 
 ## Jak aplikacja używa schematu
 
-- **Anon key + RLS** — frontend czyta wyłącznie `articles (WHERE is_published=true)`, `categories`, `tags`, `article_tags`. Reszta (scraped_items, newsletter_subscribers) niedostępna publicznie.
-- **Service role key** — używany tylko server-side w `/api/cron/*` (pipeline) i `/api/newsletter` (upsert subskrybenta). Omija RLS.
-- **`popular_tags(tag_limit)` RPC** — wywoływane z `src/lib/data.ts::getPopularTags()`. Brak RPC = fallback na in-memory aggregate (działa, ale wolniejsze, log `[data] getPopularTags RPC missing…`).
-- **`articles.updated_at`** — autotriggerowane przez `articles_set_updated_at`, ale wyłącznie przy zmianie treści (title/content/excerpt/thumbnail — migracja 005). Używane w `sitemap.ts::lastModified` i JSON-LD `dateModified`.
+- **Anon key + RLS** — strona czyta wyłącznie `articles (WHERE is_published)`, `categories`, `tags`, `article_tags` (`src/lib/data.ts`). Listy pobierają tylko kolumny kart (bez `content`); artykuł — wiersz + kategoria + tagi jednym zapytaniem (osadzenie M2M przez `article_tags`).
+- **Service role** — tylko serwer: pipeline (`/api/cron/generate`), Server Actions i dashboard `/admin`. Omija RLS. Newsletter nie dotyka bazy (MailerLite).
+- **`popular_tags(tag_limit)`** — `getPopularTags()` (pasek „Trendy", katalog tagów w prompcie). Bez RPC działa stronicowany fallback w pamięci (wolniejszy, 7+ zapytań; log `[data] getPopularTags RPC missing…`).
+- **`articles.updated_at`** — `sitemap.ts` (`lastmod`) i JSON-LD `dateModified`; podbijane triggerem wyłącznie przy zmianie treści.
+- **Limit PostgREST**: każda odpowiedź ma maks. 1000 wierszy niezależnie od `.limit()` — większe odczyty stronicuj `.range()` (wzór: `getSitemapArticles`).
+
+## Kopie zapasowe
+
+- **Automatyczne:** organizacja jest na planie **Pro** — dzienne kopie fizyczne z 7 dni (Dashboard → Database → Backups). PITR wyłączony.
+- **Ręczny pełny dump** (przed każdą zmianą schematu na produkcji) — wymaga Dockera i zalogowanego Supabase CLI; hasło bazy nie jest potrzebne, CLI tworzy tymczasową rolę logowania:
+
+  ```bash
+  B=../aifeed-backups/$(date +%F) && mkdir -p "$B"
+  npx supabase@latest db dump --linked -f "$B/schema.sql"
+  npx supabase@latest db dump --linked --data-only --use-copy -f "$B/data.sql"
+  npx supabase@latest db dump --linked --role-only -f "$B/roles.sql"
+  ```
+
+  Kopie trzymamy **poza repozytorium** (`../aifeed-backups/`). Ostatnia: `2026-10-28` — sprzed migracji 001 → 007, odtworzona testowo, z instrukcją w `README.md` w katalogu kopii.
+- **Wzorzec zmiany schematu na produkcji:**
+  1. dump;
+  2. odtworzenie w kontenerze `public.ecr.aws/supabase/postgres:<wersja>`;
+  3. migracja na kopii i `verify.sql`;
+  4. próba na produkcji w transakcji zakończonej `ROLLBACK`;
+  5. właściwe wgranie;
+  6. `verify.sql` i porównanie liczb wierszy.

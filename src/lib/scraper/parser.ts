@@ -1,5 +1,6 @@
 import Parser from "rss-parser";
 import { RSS_SOURCES } from "./sources";
+import { decodeHtmlEntities } from "@/lib/html-entities";
 
 const parser = new Parser({
   timeout: 10000,
@@ -74,9 +75,12 @@ export async function scrapeAllFeeds(): Promise<ScrapedArticle[]> {
           publishedAt = new Date();
         }
 
+        // rss-parser nie dekoduje encji w tytułach części feedów (The Verge:
+        // "&#8216;AI pet journal&#8217;") — trafiały tak do promptu, do
+        // `scraped_items` i psuły tokeny w `findRelatedItems`.
         results.push({
-          title: item.title,
-          description: item.contentSnippet || item.content || "",
+          title: decodeHtmlEntities(item.title).trim(),
+          description: decodeHtmlEntities(item.contentSnippet || item.content || ""),
           url: item.link,
           sourceName: source.name,
           category: source.category,

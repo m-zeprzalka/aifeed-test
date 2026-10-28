@@ -1,3 +1,4 @@
+import { siteConfig } from "@/config/site";
 import { staticPageMetadata } from "@/lib/seo";
 
 export const metadata = staticPageMetadata({
@@ -20,7 +21,7 @@ export default function PrivacyPage() {
         </h1>
         <p className="text-sm text-muted-foreground leading-relaxed">
           Ostatnia aktualizacja:{" "}
-          <time dateTime="2026-04-20">20&nbsp;kwietnia 2026&nbsp;r.</time>
+          <time dateTime="2026-10-28">28&nbsp;października 2026&nbsp;r.</time>
         </p>
       </header>
 
@@ -50,19 +51,38 @@ export default function PrivacyPage() {
             Dane techniczne (automatyczne)
           </h3>
           <p className="text-sm text-muted-foreground leading-relaxed mb-4">
-            Podczas korzystania z serwisu mogą być automatycznie zbierane anonimowe dane techniczne,
-            takie jak: adres IP (w formie zanonimizowanej), typ przeglądarki, system operacyjny,
-            czas wizyty oraz odwiedzane podstrony. Dane te służą wyłącznie do celów analitycznych
-            i poprawy jakości serwisu.
+            Podczas korzystania z serwisu zbierane są dane techniczne o wizycie, takie jak: typ
+            przeglądarki i urządzenia, system operacyjny, przybliżona lokalizacja (kraj/miasto),
+            czas wizyty oraz odwiedzane podstrony. Korzystamy w tym celu z dwóch narzędzi:
+          </p>
+          <ul className="space-y-2 text-sm text-muted-foreground leading-relaxed list-disc pl-5 mb-4">
+            <li>
+              <strong>Google Analytics 4</strong> (Google Ireland Ltd.) — statystyki odwiedzin;
+              Google Analytics nie przechowuje adresów IP. Narzędzie zapisuje pliki cookies
+              (opisane w punkcie 4).
+            </li>
+            <li>
+              <strong>Vercel Web Analytics</strong> (Vercel Inc., hosting serwisu) — zagregowane,
+              anonimowe statystyki ruchu, bez plików cookies i bez identyfikowania użytkownika.
+            </li>
+          </ul>
+          <p className="text-sm text-muted-foreground leading-relaxed mb-4">
+            Dane te służą wyłącznie do celów analitycznych i poprawy jakości serwisu. Serwer
+            hostingu może dodatkowo przetwarzać adres IP w logach technicznych w celu zapewnienia
+            bezpieczeństwa (np. ochrony przed nadużyciami).
           </p>
           <h3 className="text-sm font-bold mb-2">
             Newsletter (dobrowolne)
           </h3>
           <p className="text-sm text-muted-foreground leading-relaxed">
-            Jedyną sytuacją, w której zbieramy dane osobowe, jest dobrowolna subskrypcja
-            newslettera. W takim przypadku przetwarzamy wyłącznie podany adres e-mail w celu
-            wysyłki informacji o nowych artykułach. Subskrypcję można anulować w dowolnym momencie
-            poprzez link rezygnacji zawarty w każdej wiadomości.
+            Jedyną sytuacją, w której zbieramy dane osobowe, jest dobrowolny zapis na newsletter.
+            Przetwarzamy wyłącznie podany adres e-mail w celu wysyłki informacji o nowych
+            artykułach. Listę mailingową prowadzimy w systemie MailerLite (MailerLite Limited,
+            Irlandia), który przetwarza adres w naszym imieniu na podstawie umowy powierzenia
+            przetwarzania danych. Po zapisie wysyłamy wiadomość z linkiem
+            potwierdzającym — bez kliknięcia w link adres nie zostanie aktywowany i nie otrzymasz
+            newslettera. Każda wiadomość zawiera link rezygnacji, a usunięcia adresu możesz zażądać
+            w każdej chwili pod adresem {siteConfig.contactEmail}.
           </p>
         </section>
 
@@ -88,20 +108,21 @@ export default function PrivacyPage() {
             Serwis AiFeed może wykorzystywać pliki cookies w następujących celach:
           </p>
           <h3 className="text-sm font-bold mb-2">
-            Cookies niezbędne
+            Pamięć przeglądarki (funkcjonalna)
           </h3>
           <p className="text-sm text-muted-foreground leading-relaxed mb-4">
-            Zapewniają podstawowe funkcje serwisu, takie jak zapamiętanie preferencji użytkownika
-            (np. motyw kolorystyczny). Nie wymagają zgody, ponieważ są niezbędne do działania
-            strony.
+            Serwis zapisuje w pamięci Twojej przeglądarki (localStorage/sessionStorage) wyłącznie
+            preferencje potrzebne do działania interfejsu: wybrany motyw kolorystyczny, ostatnie
+            wyszukiwania i pozycję paska kategorii. Te dane nie opuszczają Twojego urządzenia
+            i możesz je usunąć, czyszcząc dane witryny w przeglądarce.
           </p>
           <h3 className="text-sm font-bold mb-2">
             Cookies analityczne
           </h3>
           <p className="text-sm text-muted-foreground leading-relaxed">
-            Mogą być używane do zbierania anonimowych statystyk odwiedzin. Pomagają nam zrozumieć,
-            jak użytkownicy korzystają z serwisu, co pozwala na jego ulepszanie. Użytkownik może
-            zablokować cookies analityczne w ustawieniach przeglądarki.
+            Google Analytics zapisuje pliki cookies (<code>_ga</code>, <code>_ga_*</code>) służące
+            do rozróżniania wizyt i zbierania statystyk odwiedzin. Możesz je zablokować lub usunąć
+            w ustawieniach przeglądarki albo za pomocą dodatku Google Analytics Opt-out.
           </p>
         </section>
 
@@ -159,7 +180,7 @@ export default function PrivacyPage() {
           </h2>
           <p className="text-sm text-muted-foreground leading-relaxed">
             W sprawach związanych z ochroną danych osobowych prosimy o kontakt pod adresem
-            e-mail: kontakt@aifeed.pl.
+            e-mail: {siteConfig.contactEmail}.
           </p>
         </section>
 

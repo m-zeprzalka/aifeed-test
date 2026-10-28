@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { Search as SearchIcon, FileQuestion, AlertTriangle } from "lucide-react";
 import { ArticleGrid } from "@/components/articles/article-grid";
 import { EmptyState } from "@/components/ui/empty-state";
-import type { ArticleWithRelations } from "@/lib/data";
+import type { ArticleCardData } from "@/lib/data";
 import { pluralize, SEARCH_QUERY_MAX_LENGTH } from "@/lib/search-utils";
 import { useArticleSearch } from "@/lib/hooks/use-article-search";
 
@@ -14,7 +14,7 @@ export default function SearchPage() {
   const [query, setQuery] = useState(searchParams.get("q") || "");
   // Cała logika debounce/abort/error siedzi w hooku współdzielonym
   // z SearchModal — zob. `src/lib/hooks/use-article-search.ts`.
-  const { results, loading, error, searched } = useArticleSearch<ArticleWithRelations>(query, 300);
+  const { results, loading, error, searched } = useArticleSearch<ArticleCardData>(query, 300);
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-10 sm:px-6 lg:px-8">

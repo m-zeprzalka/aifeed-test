@@ -1,7 +1,9 @@
-"use client";
-
-import { useMemo } from "react";
 import { slugifyHeading, stripInlineMarkdown } from "@/lib/heading-id";
+
+// Komponent SERWEROWY — spis treści to statyczne kotwice, zero interakcji.
+// Jako client component dostawał w propsie cały markdown artykułu, który
+// przez to trafiał do payloadu RSC drugi raz (~7 KB na każdą stronę
+// artykułu, obok tej samej treści już wyrenderowanej w HTML).
 
 interface TocItem {
   id: string;
@@ -38,7 +40,7 @@ interface TableOfContentsProps {
 }
 
 export function TableOfContents({ content }: TableOfContentsProps) {
-  const headings = useMemo(() => extractHeadings(content), [content]);
+  const headings = extractHeadings(content);
 
   // Threshold lowered from 3 to 2: a 2-section article still benefits from
   // visible structure ("here's what's covered") and the navigation cost of

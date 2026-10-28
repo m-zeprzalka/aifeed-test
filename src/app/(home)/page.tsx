@@ -1,6 +1,5 @@
 import { ArrowRight } from "lucide-react";
 import Link from "next/link";
-import { Thumbnail } from "@/components/ui/thumbnail";
 import { ArticleCard } from "@/components/articles/article-card";
 import { TrendingTags } from "@/components/layout/trending-tags";
 import { PreferredSourceCard } from "@/components/layout/preferred-source-card";
@@ -11,7 +10,7 @@ import {
   getPopularTags,
 } from "@/lib/data";
 import { jsonLdScript } from "@/lib/jsonld";
-import { homeMetadata } from "@/lib/seo";
+import { homeMetadata, websiteJsonLd } from "@/lib/seo";
 
 // Home metadata pochodzi z centralnego helpera `lib/seo.ts`. Używa
 // `title.absolute` żeby ominąć template z root layoutu (uniknięcie "AiFeed |
@@ -69,7 +68,7 @@ export default async function HomePage() {
 
       <TrendingTags tags={trendingTags} />
 
-      {/* Hero — 1 latest article from each of the top 5 categories */}
+      {/* Hero — najnowszy artykuł + kolumna 4 kolejnych (newest-first) */}
       {hero && (
         <section className="mx-auto max-w-7xl px-4 pt-6 pb-2 sm:px-6 lg:px-8">
           <div className="grid gap-6 lg:grid-cols-12">
@@ -101,38 +100,7 @@ export default async function HomePage() {
         <section aria-label="Najnowsze artykuły" className="mx-auto max-w-7xl px-4 pt-4 pb-2 sm:px-6 lg:px-8">
           <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
             {freshGrid.map((article) => (
-              <Link
-                key={article.id}
-                href={`/artykul/${article.slug}`}
-                className="group flex flex-col overflow-hidden rounded-xl border border-border/60 bg-card card-hover"
-              >
-                <div className="relative aspect-[16/10] overflow-hidden bg-muted">
-                  {article.thumbnail_url ? (
-                    <Thumbnail
-                      src={article.thumbnail_url}
-                      alt={article.title}
-                      fill
-                      className="object-cover transition-transform duration-700 ease-out group-hover:scale-[1.03]"
-                      sizes="(max-width: 768px) 50vw, 25vw"
-                    />
-                  ) : (
-                    <div className="h-full w-full bg-gradient-to-br from-muted to-muted/50" />
-                  )}
-                </div>
-                <div className="p-3">
-                  <h3 className="text-sm font-bold leading-snug line-clamp-2 group-hover:text-primary transition-colors duration-300">
-                    {article.title}
-                  </h3>
-                  {article.published_at && (
-                    <time
-                      dateTime={article.published_at}
-                      className="mt-2 text-xs font-mono text-muted-foreground block"
-                    >
-                      {new Date(article.published_at).toLocaleDateString("pl-PL", { day: "numeric", month: "long" })}
-                    </time>
-                  )}
-                </div>
-              </Link>
+              <ArticleCard key={article.id} article={article} variant="tile" />
             ))}
           </div>
         </section>
@@ -180,40 +148,8 @@ export default async function HomePage() {
               ) : catIndex % 3 === 1 ? (
                 /* Layout B: 4-column compact grid */
                 <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
-                  {cat.articles.slice(0, 4).map((article, idx) => (
-                    <Link
-                      key={article.id}
-                      href={`/artykul/${article.slug}`}
-                      className="group flex flex-col overflow-hidden rounded-xl border border-border/60 bg-card card-hover"
-                    >
-                      <div className="relative aspect-[16/10] overflow-hidden bg-muted">
-                        {article.thumbnail_url ? (
-                          <Thumbnail
-                            src={article.thumbnail_url}
-                            alt={article.title}
-                            fill
-                            className="object-cover transition-transform duration-700 ease-out group-hover:scale-[1.03]"
-                            sizes="(max-width: 768px) 50vw, 25vw"
-                            loading={idx === 0 ? "eager" : "lazy"}
-                          />
-                        ) : (
-                          <div className="h-full w-full bg-gradient-to-br from-muted to-muted/50" />
-                        )}
-                      </div>
-                      <div className="p-3">
-                        <h3 className="text-sm font-bold leading-snug line-clamp-2 group-hover:text-primary transition-colors duration-300">
-                          {article.title}
-                        </h3>
-                        {article.published_at && (
-                          <time
-                            dateTime={article.published_at}
-                            className="mt-2 text-xs font-mono text-muted-foreground block"
-                          >
-                            {new Date(article.published_at).toLocaleDateString("pl-PL", { day: "numeric", month: "long" })}
-                          </time>
-                        )}
-                      </div>
-                    </Link>
+                  {cat.articles.slice(0, 4).map((article) => (
+                    <ArticleCard key={article.id} article={article} variant="tile" />
                   ))}
                 </div>
               ) : (
@@ -255,25 +191,11 @@ export default async function HomePage() {
         <PreferredSourceCard />
       </div>
 
-      {/* JSON-LD. Bez `SearchAction` — Google wycofał sitelinks searchbox
-          (2024), a nasz /szukaj jest noindex; blok był martwym sygnałem. */}
+      {/* WebSite JSON-LD (z `@id`, wydawca po referencji do organizacji
+          z root layoutu) — zob. `websiteJsonLd` w lib/seo.ts. */}
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{
-          __html: jsonLdScript({
-            "@context": "https://schema.org",
-            "@type": "WebSite",
-            name: siteConfig.name,
-            url: siteConfig.url,
-            description: siteConfig.description,
-            inLanguage: "pl-PL",
-            publisher: {
-              "@type": "Organization",
-              name: siteConfig.name,
-              url: siteConfig.url,
-            },
-          }),
-        }}
+        dangerouslySetInnerHTML={{ __html: jsonLdScript(websiteJsonLd()) }}
       />
     </>
   );

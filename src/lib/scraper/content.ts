@@ -1,129 +1,152 @@
-import { safeFetch, readTextCapped } from "@/lib/scraper/safe-fetch";
+import { safeFetch, readTextCapped, validateExternalUrl } from "@/lib/scraper/safe-fetch";
+import { decodeHtmlEntities } from "@/lib/html-entities";
 
-// Twardy limit czytanego HTML. Interesuje nas pierwsze ~6000 znaków tekstu
-// po ekstrakcji, więc 3 MB surowego HTML to bezpieczny zapas; bez capa wrogi
-// serwer mógłby wysłać setki MB w limicie czasu (memory DoS).
+// Twardy limit czytanego HTML. 3 MB surowego HTML to bezpieczny zapas na
+// kilkanaście tysięcy znaków tekstu; bez capa wrogi serwer mógłby wysłać
+// setki MB w limicie czasu (memory DoS).
 const MAX_HTML_BYTES = 3 * 1024 * 1024;
 
+/** Domyślny budżet tekstu źródła dla promptu (~1500 tokenów). */
+export const DEFAULT_SOURCE_CHARS = 6000;
+
 /**
- * Scrapes the full text content of a source article from its URL.
- * Used to provide the AI writer with actual source material
- * instead of just an RSS title/snippet — preventing hallucinations.
- *
- * SSRF hardening (protokół, blokada hostów wewnętrznych i literałów IP,
- * walidacja KAŻDEGO hopu przekierowania) siedzi w `safeFetch` —
- * `src/lib/scraper/safe-fetch.ts`. NIE luzować; zmiany wymagają testów
- * w `safe-fetch.test.ts`.
+ * Wynik JEDNEGO pobrania strony źródłowej: treść dla AI + metadane do
+ * miniatury. Wcześniej og:image był scrape'owany osobnym, drugim żądaniem
+ * do tej samej strony (1–3 s budżetu pipeline'u na artykuł i podwójne
+ * obciążenie wydawcy).
  */
-export async function scrapeArticleContent(url: string): Promise<string> {
+export interface SourcePage {
+  /** Czysty tekst artykułu; "" gdy strona nie nadaje się do adaptacji. */
+  text: string;
+  /** og:image (lub twitter:image) jako absolutny URL po walidacji SSRF. */
+  ogImage: string | null;
+  /** og:site_name po zdekodowaniu encji ("Spider's Web", nie "Spider&#x27;s Web"). */
+  siteName: string | null;
+  /** Powód pustego `text` — trafia do telemetrii (`scrape_skip`). */
+  failure: string | null;
+}
+
+/**
+ * Pobiera stronę źródłową przez `safeFetch` (SSRF: protokół, blokada hostów
+ * wewnętrznych i literałów IP, walidacja KAŻDEGO hopu przekierowania — NIE
+ * luzować; zmiany wymagają testów w `safe-fetch.test.ts`).
+ */
+export async function scrapeSourcePage(url: string, maxChars = DEFAULT_SOURCE_CHARS): Promise<SourcePage> {
+  const failed = (failure: string): SourcePage => ({ text: "", ogImage: null, siteName: null, failure });
   try {
     const res = await safeFetch(url, {
       headers: {
         "User-Agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         Accept: "text/html,application/xhtml+xml",
-        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Language": "en-US,en;q=0.9,pl;q=0.8",
       },
       timeoutMs: 15_000,
     });
 
-    if (!res) {
-      console.warn(`[Content Scraper] URL rejected by SSRF guard or redirect chain: ${url}`);
-      return "";
-    }
-    if (!res.ok) {
-      console.warn(`[Content Scraper] HTTP ${res.status} for ${url}`);
-      return "";
-    }
+    if (!res) return failed("blocked-url");
+    if (!res.ok) return failed(`http-${res.status}`);
 
     // Reject non-HTML responses (PDFs, images, binaries)
     const contentType = res.headers.get("content-type") || "";
     if (!contentType.includes("text/html") && !contentType.includes("application/xhtml")) {
-      console.warn(`[Content Scraper] Skipping non-HTML content-type: ${contentType} for ${url}`);
-      return "";
+      return failed(`content-type:${contentType.split(";")[0] || "none"}`);
     }
 
-    let html = await readTextCapped(res, MAX_HTML_BYTES);
+    const html = await readTextCapped(res, MAX_HTML_BYTES);
+    // Względne og:image rozwiązujemy względem URL-a PO przekierowaniach.
+    const base = new URL(res.url || url);
+    const meta = extractOgMeta(html, base);
+    const { text, failure } = extractArticleText(html, maxChars);
+    if (failure) console.warn(`[Content Scraper] ${failure} for ${url}`);
+    return { text, ...meta, failure };
+  } catch (error) {
+    console.warn(`[Content Scraper] Failed for ${url}:`, error);
+    return failed(error instanceof Error && error.name === "TimeoutError" ? "timeout" : "network");
+  }
+}
 
-    // Detect binary/PDF content that slipped through
-    if (html.startsWith("%PDF") || html.includes("endobj") || html.includes("endstream")) {
-      console.warn(`[Content Scraper] PDF binary detected for ${url}`);
-      return "";
+// ===================== META (og:image / og:site_name) =====================
+
+/**
+ * Mapa `<meta>` po `property`/`name` (lowercase) → `content`. Parsujemy
+ * atrybuty niezależnie od kolejności i rodzaju cudzysłowu; pierwsze
+ * wystąpienie wygrywa (jak w crawlerach social).
+ */
+function readMetaTags(html: string): Map<string, string> {
+  const head = html.slice(0, 400_000); // meta tagi żyją w <head>
+  const tags = new Map<string, string>();
+  for (const [tag] of head.matchAll(/<meta\b[^>]*>/gi)) {
+    const attrs: Record<string, string> = {};
+    for (const m of tag.matchAll(/([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) {
+      attrs[m[1].toLowerCase()] = m[2] ?? m[3] ?? "";
     }
+    const key = (attrs.property || attrs.name || "").toLowerCase();
+    const content = attrs.content;
+    if (key && content && !tags.has(key)) tags.set(key, decodeHtmlEntities(content).trim());
+  }
+  return tags;
+}
 
-    // ---- Strip non-content elements ----
-    html = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "");
-    html = html.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "");
-    html = html.replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, "");
-    html = html.replace(/<nav[^>]*>[\s\S]*?<\/nav>/gi, "");
-    html = html.replace(/<header[^>]*>[\s\S]*?<\/header>/gi, "");
-    html = html.replace(/<footer[^>]*>[\s\S]*?<\/footer>/gi, "");
-    html = html.replace(/<aside[^>]*>[\s\S]*?<\/aside>/gi, "");
-    html = html.replace(/<form[^>]*>[\s\S]*?<\/form>/gi, "");
-    html = html.replace(/<svg[^>]*>[\s\S]*?<\/svg>/gi, "");
-    html = html.replace(/<iframe[^>]*>[\s\S]*?<\/iframe>/gi, "");
-    html = html.replace(/<!--[\s\S]*?-->/g, "");
+export function extractOgMeta(html: string, base: URL): { ogImage: string | null; siteName: string | null } {
+  const meta = readMetaTags(html);
+  const rawImage =
+    meta.get("og:image:secure_url") || meta.get("og:image") || meta.get("og:image:url") || meta.get("twitter:image");
+  // og:image to treść atakowalna (kontroluje ją autor strony) — pełna
+  // walidacja SSRF zanim URL trafi dalej (HEAD w generatorze, potem DB).
+  const ogImage = rawImage ? validateExternalUrl(rawImage, base)?.href ?? null : null;
+  const siteName = meta.get("og:site_name") || null;
+  return { ogImage, siteName };
+}
 
-    // ---- Find the main article body ----
-    // Priority: <article> > <main> > <body>
-    const articleMatch = html.match(/<article[^>]*>([\s\S]*?)<\/article>/i);
-    const mainMatch = html.match(/<main[^>]*>([\s\S]*?)<\/main>/i);
-    const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+// ===================== TREŚĆ ARTYKUŁU =====================
 
-    const contentHtml =
-      articleMatch?.[1] || mainMatch?.[1] || bodyMatch?.[1] || html;
+const NON_CONTENT_TAGS = ["script", "style", "noscript", "nav", "header", "footer", "aside", "form", "svg", "iframe"];
 
-    // ---- Convert HTML to plain text ----
-    let text = contentHtml
+/**
+ * HTML → czysty tekst artykułu (priorytet: `<article>` > `<main>` > `<body>`),
+ * przycięty do `maxChars`. Zwraca `failure` zamiast tekstu, gdy wynik nie
+ * nadaje się do adaptacji (za krótki, binarny).
+ */
+export function extractArticleText(rawHtml: string, maxChars = DEFAULT_SOURCE_CHARS): { text: string; failure: string | null } {
+  // Binarny PDF, który prześlizgnął się przez content-type.
+  if (rawHtml.startsWith("%PDF")) return { text: "", failure: "binary-pdf" };
+
+  let html = rawHtml;
+  for (const tag of NON_CONTENT_TAGS) {
+    html = html.replace(new RegExp(`<${tag}[^>]*>[\\s\\S]*?</${tag}>`, "gi"), "");
+  }
+  html = html.replace(/<!--[\s\S]*?-->/g, "");
+
+  const articleMatch = html.match(/<article[^>]*>([\s\S]*?)<\/article>/i);
+  const mainMatch = html.match(/<main[^>]*>([\s\S]*?)<\/main>/i);
+  const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+  const contentHtml = articleMatch?.[1] || mainMatch?.[1] || bodyMatch?.[1] || html;
+
+  let text = decodeHtmlEntities(
+    contentHtml
       .replace(/<br\s*\/?>/gi, "\n")
       .replace(/<\/p>/gi, "\n\n")
       .replace(/<\/h[1-6]>/gi, "\n\n")
       .replace(/<\/li>/gi, "\n")
       .replace(/<\/blockquote>/gi, "\n")
       .replace(/<[^>]+>/g, " ")
-      // Decode common HTML entities
-      .replace(/&nbsp;/g, " ")
-      .replace(/&amp;/g, "&")
-      .replace(/&lt;/g, "<")
-      .replace(/&gt;/g, ">")
-      .replace(/&quot;/g, '"')
-      .replace(/&#0?39;/g, "'")
-      .replace(/&#x27;/g, "'")
-      .replace(/&#8217;/g, "\u2019")
-      .replace(/&#8216;/g, "\u2018")
-      .replace(/&#8220;/g, "\u201C")
-      .replace(/&#8221;/g, "\u201D")
-      .replace(/&#8212;/g, "\u2014")
-      .replace(/&#8211;/g, "\u2013")
-      // Clean up whitespace
-      .replace(/[ \t]+/g, " ")
-      .replace(/\n[ \t]+/g, "\n")
-      .replace(/\n{3,}/g, "\n\n")
-      .trim();
+  )
+    .replace(/[ \t ]+/g, " ")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 
-    // ---- Truncate to fit AI token budget (~6000 chars ≈ 1800 tokens) ----
-    const MAX_CHARS = 6000;
-    if (text.length > MAX_CHARS) {
-      text = text.slice(0, MAX_CHARS) + "\n\n[treść skrócona]";
-    }
-
-    // Validate text is actually readable (not garbled binary)
-    if (text.length < 100) {
-      console.warn(`[Content Scraper] Too short (${text.length} chars) for ${url}`);
-      return "";
-    }
-
-    // Check ratio of printable characters — reject garbled content
-    const printable = text.replace(/[^\x20-\x7E\u00A0-\u024F\u0400-\u04FF\n]/g, "");
-    if (printable.length / text.length < 0.7) {
-      console.warn(`[Content Scraper] Low readability ratio for ${url}, likely binary`);
-      return "";
-    }
-
-    console.log(`[Content Scraper] Extracted ${text.length} chars from ${url}`);
-    return text;
-  } catch (error) {
-    console.warn(`[Content Scraper] Failed for ${url}:`, error);
-    return "";
+  if (text.length > maxChars) {
+    text = text.slice(0, maxChars) + "\n\n[treść skrócona]";
   }
+
+  if (text.length < 100) return { text: "", failure: `too-short:${text.length}` };
+
+  // Udział znaków drukowalnych (łacina z diakrytykami, cyrylica, typografia)
+  // — odrzuca "tekst" będący zdekodowanym binarnym śmieciem.
+  const printable = text.replace(/[^\x20-\x7E -ɏЀ-ӿ‐-‧€\n]/g, "");
+  if (printable.length / text.length < 0.7) return { text: "", failure: "unreadable" };
+
+  return { text, failure: null };
 }

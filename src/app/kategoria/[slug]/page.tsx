@@ -17,16 +17,15 @@ const PAGE_SIZE = 12;
 
 /**
  * Uwaga nt. renderowania: strona czyta `searchParams` (paginacja `?page=N`),
- * a to Dynamic API — route renderuje się per-request mimo `revalidate`.
- * Koszt jest kontrolowany: `getCategoryBySlug` jest deduplikowane przez
- * React cache() (1 query zamiast 3), a paginacja poza zakresem kończy się
- * natychmiastowym notFound(). Przejście na ścieżkową paginację
- * (`/kategoria/[slug]/strona/[nr]`) przywróciłoby pełne ISR — punkt w
- * ROADMAP.md, wymaga 301 dla starych URL-i `?page=`.
+ * a to Dynamic API — route renderuje się per-request mimo `revalidate`
+ * (dlatego bez `generateStaticParams` — i tak by go ignorowała). Koszt jest
+ * kontrolowany: `getCategoryBySlug` jest deduplikowane przez React cache(),
+ * nieznany slug odcina layout.tsx (twarde 404), a paginacja poza zakresem
+ * kończy się notFound() — przez loading.tsx już PO wysłaniu nagłówków, więc
+ * ze statusem 200 + noindex (metadane niżej nie dają przy tym canonicala ani
+ * "index"). Prawdziwe 404 i pełne ISR da ścieżkowa paginacja
+ * (`/kategoria/[slug]/strona/[nr]`) — ROADMAP, backlog 7.2.
  */
-export function generateStaticParams() {
-  return siteConfig.categories.map((c) => ({ slug: c.slug }));
-}
 
 interface PageProps {
   params: Promise<{ slug: string }>;
@@ -36,8 +35,14 @@ interface PageProps {
 export async function generateMetadata({ params, searchParams }: PageProps): Promise<Metadata> {
   const [{ slug }, { page: pageParam }] = await Promise.all([params, searchParams]);
   const pageNum = Math.max(1, parseInt(pageParam || "1", 10) || 1);
-  const category = await getCategoryBySlug(slug);
+  const [category, paginated] = await Promise.all([
+    getCategoryBySlug(slug),
+    getArticlesByCategoryPaginated(slug, PAGE_SIZE, pageNum),
+  ]);
   if (!category) return notFoundMetadata("Kategoria nie znaleziona");
+  // Strona poza zakresem: noindex BEZ canonicala/"index, follow" — inaczej
+  // obok noindexu z notFound() szły sprzeczne sygnały.
+  if (paginated.articles.length === 0 && pageNum > 1) return notFoundMetadata("Strona nie istnieje");
   return categoryMetadata(category, pageNum);
 }
 
@@ -55,10 +60,10 @@ export default async function CategoryPage({ params, searchParams }: PageProps) 
 
   const { articles, page, totalPages, total, hasPrev, hasNext } = paginated;
 
-  // Puste strony paginacji (?page=9999) muszą być twardym 404. Bez tego każda
-  // liczba całkowita to osobny, indeksowalny, pusty URL z self-canonical —
-  // nieskończona przestrzeń thin content (soft-404), dokładnie sygnał
-  // "scaled content abuse", którego unikamy.
+  // Puste strony paginacji (?page=9999) → notFound() (noindex, bez canonicala
+  // — zob. generateMetadata). Bez tego każda liczba całkowita byłaby osobnym,
+  // indeksowalnym, pustym URL-em z self-canonical — nieskończona przestrzeń
+  // thin content, dokładnie sygnał "scaled content abuse", którego unikamy.
   if (articles.length === 0 && page > 1) notFound();
 
   // Spójne `CollectionPage > ItemList` (taki sam wzorzec jak na stronie tagu).

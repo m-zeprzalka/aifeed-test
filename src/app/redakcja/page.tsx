@@ -2,7 +2,7 @@ import { Mail, ArrowUpRight, Cpu, PenLine, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { siteConfig } from "@/config/site";
 import { jsonLdScript } from "@/lib/jsonld";
-import { staticPageMetadata } from "@/lib/seo";
+import { FOUNDER_ID, ORGANIZATION_ID, staticPageMetadata } from "@/lib/seo";
 
 export const metadata = staticPageMetadata({
   title: "Redakcja",
@@ -11,28 +11,31 @@ export const metadata = staticPageMetadata({
   path: "/redakcja",
 });
 
-// Person JSON-LD — filar 1 SEO (E-E-A-T): imienny, weryfikowalny autor.
-// `sameAs` wskazuje realne, istniejące profile (zeprzalka.com, GitHub) —
-// spójne z `founder` w NewsMediaOrganization (layout) i `author` w
-// NewsArticle (strona artykułu). Jedna encja, trzy konteksty.
-const PERSON_JSON_LD = {
+// ProfilePage + Person — filar 1 SEO (E-E-A-T): imienny, weryfikowalny
+// twórca SERWISU. `@id` = ta sama encja co `founder` w NewsMediaOrganization
+// (root layout); `worksFor` wskazuje organizację po `@id`. Artykuły NIE mają
+// autora-osoby (decyzja właściciela 2026-08-11 — nazwisko firmuje serwis).
+// `sameAs`: wyłącznie realne, istniejące profile.
+const PROFILE_JSON_LD = {
   "@context": "https://schema.org",
-  "@type": "Person",
-  name: siteConfig.author.name,
+  "@type": "ProfilePage",
   url: `${siteConfig.url}/redakcja`,
-  jobTitle: "Digital Solutions Architect",
-  sameAs: siteConfig.author.sameAs,
-  worksFor: {
-    "@type": "NewsMediaOrganization",
-    name: siteConfig.name,
-    url: siteConfig.url,
+  inLanguage: "pl-PL",
+  mainEntity: {
+    "@type": "Person",
+    "@id": FOUNDER_ID,
+    name: siteConfig.author.name,
+    url: `${siteConfig.url}/redakcja`,
+    jobTitle: "Digital Solutions Architect",
+    sameAs: siteConfig.author.sameAs,
+    worksFor: { "@id": ORGANIZATION_ID },
+    knowsAbout: [
+      "sztuczna inteligencja",
+      "modele językowe",
+      "projektowanie produktów cyfrowych",
+      "full-stack development",
+    ],
   },
-  knowsAbout: [
-    "sztuczna inteligencja",
-    "modele językowe",
-    "projektowanie produktów cyfrowych",
-    "full-stack development",
-  ],
 } as const;
 
 export default function EditorialPage() {
@@ -40,7 +43,7 @@ export default function EditorialPage() {
     <div className="mx-auto max-w-3xl px-4 py-10 sm:px-6 lg:px-8">
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: jsonLdScript(PERSON_JSON_LD) }}
+        dangerouslySetInnerHTML={{ __html: jsonLdScript(PROFILE_JSON_LD) }}
       />
 
       {/* Header */}
@@ -163,11 +166,11 @@ export default function EditorialPage() {
           do autora.
         </p>
         <a
-          href="mailto:kontakt@aifeed.pl"
+          href={`mailto:${siteConfig.contactEmail}`}
           className="inline-flex items-center gap-2 rounded-lg border border-border/60 bg-card/80 px-4 py-2.5 text-sm font-medium transition-all duration-300 hover:border-primary/40 hover:bg-card"
         >
           <Mail className="size-4" />
-          kontakt@aifeed.pl
+          {siteConfig.contactEmail}
         </a>
       </section>
     </div>

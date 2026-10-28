@@ -1,7 +1,8 @@
 import { cache } from "react";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import type { Article, Category, Tag } from "@/types/database";
+import type { Article, Category, CategoryRef, Tag } from "@/types/database";
 import { escapeIlike, sanitizeTsQuery } from "@/lib/search-utils";
+import { normalizeThumbnailUrl } from "@/lib/images/thumbnail-url";
 
 // ----- Supabase client (read-only, anon key) -----
 // Uses anon key (not server.ts cookie client) because all data access here is
@@ -17,89 +18,94 @@ function db(): SupabaseClient {
   return _client;
 }
 
+// ===================== TYPY I PROJEKCJE =====================
+
+/**
+ * Projekcja dla WSZYSTKICH list artykułów (home, kategoria, tag, wyszukiwarka,
+ * podobne, RSS). Celowo bez `content` (~7 KB markdownu na artykuł) i bez
+ * tagów — karty ich nie renderują. Wcześniej listy ciągnęły `select("*")`
+ * + osobne zapytanie o tagi: regeneracja home pobierała ~45 pełnych treści,
+ * a /api/search wysyłał do przeglądarki ~140 KB JSON-a na jedno zapytanie.
+ */
+const CARD_COLUMNS =
+  "id, title, slug, excerpt, thumbnail_url, reading_time, published_at, category:categories(id, name, slug)";
+
+export type ArticleCardData = Pick<
+  Article,
+  "id" | "title" | "slug" | "excerpt" | "thumbnail_url" | "reading_time" | "published_at"
+> & { category: CategoryRef | null };
+
+/** Pełny artykuł (strona `/artykul/[slug]`) z kategorią i tagami. */
 export type ArticleWithRelations = Article & { category: Category | null; tags: Tag[] };
 
-// ===================== BATCH HELPERS =====================
+/** Wiersz z `article_tags!inner(tag_id)` — filtr/scoring po tagach. */
+type WithTagMatches = ArticleCardData & { article_tags?: { tag_id: string }[] };
 
-/** Attach tags to multiple articles in a single query (eliminates N+1) */
-async function attachTagsBatch(
-  articles: (Article & { category: Category | null })[]
-): Promise<ArticleWithRelations[]> {
-  if (articles.length === 0) return [];
-
-  const ids = articles.map((a) => a.id);
-  const { data: tagRows, error } = await db()
-    .from("article_tags")
-    .select("article_id, tag:tags(*)")
-    .in("article_id", ids);
-
-  if (error) {
-    console.error("[data] attachTagsBatch failed:", error.message);
-    return articles.map((a) => ({ ...a, tags: [] }));
-  }
-
-  // PostgREST returns the joined `tag:tags(*)` row as `Tag | Tag[] | null`
-  // depending on the join arity. We coerce through `unknown` to a narrow
-  // local type instead of `any` so the rest of the function stays typed.
-  type TagJoinRow = { article_id: string; tag: Tag | Tag[] | null };
-  const tagMap = new Map<string, Tag[]>();
-  for (const row of (tagRows || []) as unknown as TagJoinRow[]) {
-    if (!row.tag) continue;
-    const tags = Array.isArray(row.tag) ? row.tag : [row.tag];
-    const existing = tagMap.get(row.article_id) || [];
-    existing.push(...tags);
-    tagMap.set(row.article_id, existing);
-  }
-
-  return articles.map((a) => ({ ...a, tags: tagMap.get(a.id) || [] }));
+/**
+ * Wiersz z bazy → dane karty: zdejmuje pomocniczy embed `article_tags`
+ * (filtry po tagu) i normalizuje URL miniatury (`&amp;` z historycznych
+ * rekordów — zob. `lib/images/thumbnail-url.ts`).
+ */
+function toCard(row: WithTagMatches): ArticleCardData {
+  const { id, title, slug, excerpt, thumbnail_url, reading_time, published_at, category } = row;
+  return { id, title, slug, excerpt, reading_time, published_at, category, thumbnail_url: normalizeThumbnailUrl(thumbnail_url) };
 }
 
-/** Attach tags to a single article */
-async function attachTags(
-  article: Article & { category: Category | null }
-): Promise<ArticleWithRelations> {
-  const results = await attachTagsBatch([article]);
-  return results[0];
+function toCards(rows: unknown): ArticleCardData[] {
+  return ((rows ?? []) as WithTagMatches[]).map(toCard);
 }
 
-// ===================== DATA ACCESS =====================
+/**
+ * Polityka błędów bazy: funkcje, z których powstają strony cache'owane przez
+ * ISR (home, artykuł, sitemapy, RSS), RZUCAJĄ — nieudana regeneracja zostawia
+ * wtedy w cache poprzednią, poprawną wersję. Zwrócenie "pustych danych"
+ * zostałoby zcache'owane: chwilowa czkawka Supabase dawała pustą sitemapę na
+ * godzinę albo prawdziwe 404 istniejącego artykułu (od kiedy artykuł nie ma
+ * `loading.tsx`, `notFound()` ustawia realny status). Elementy pomocnicze
+ * (ticker, trendy, podobne, prev/next) degradują się łagodnie — log + pusto.
+ */
+function dbFailure(context: string, error: { message: string }): Error {
+  return new Error(`[data] ${context} failed: ${error.message}`);
+}
 
-export async function getArticles(limit = 10): Promise<ArticleWithRelations[]> {
-  const { data: articles, error } = await db()
+// ===================== ARTYKUŁY =====================
+
+/** Najnowsze opublikowane artykuły (home, RSS). */
+export async function getArticles(limit = 10): Promise<ArticleCardData[]> {
+  const { data, error } = await db()
     .from("articles")
-    .select("*, category:categories(*)")
+    .select(CARD_COLUMNS)
     .eq("is_published", true)
     .order("published_at", { ascending: false })
+    .order("id", { ascending: false })
     .limit(limit);
 
-  if (error) {
-    console.error("[data] getArticles failed:", error.message);
-    return [];
-  }
-  if (!articles || articles.length === 0) return [];
-
-  return attachTagsBatch(articles);
+  if (error) throw dbFailure("getArticles", error);
+  return toCards(data);
 }
 
+/**
+ * Pełny artykuł z kategorią i tagami w JEDNYM zapytaniu — PostgREST sam
+ * wykrywa relację wiele-do-wielu przez `article_tags` (PK = oba FK), więc
+ * `tags(...)` osadza tagi bez osobnego round-tripu.
+ */
 export async function getArticleBySlug(slug: string): Promise<ArticleWithRelations | null> {
-  const { data: article, error } = await db()
+  const { data, error } = await db()
     .from("articles")
-    .select("*, category:categories(*)")
+    .select("*, category:categories(*), tags(id, name, slug)")
     .eq("slug", slug)
     .eq("is_published", true)
     .maybeSingle();
 
-  if (error) {
-    console.error("[data] getArticleBySlug failed:", error.message);
-    return null;
-  }
-  if (!article) return null;
-
-  return attachTags(article);
+  // Błąd ≠ brak artykułu: `null` oznacza WYŁĄCZNIE "nie istnieje" (→ 404).
+  if (error) throw dbFailure("getArticleBySlug", error);
+  if (!data) return null;
+  const article = data as ArticleWithRelations;
+  return { ...article, thumbnail_url: normalizeThumbnailUrl(article.thumbnail_url), tags: article.tags ?? [] };
 }
 
 export interface PaginatedResult {
-  articles: ArticleWithRelations[];
+  articles: ArticleCardData[];
   page: number;
   pageSize: number;
   total: number;
@@ -108,44 +114,54 @@ export interface PaginatedResult {
   hasNext: boolean;
 }
 
+function emptyPage(page: number, pageSize: number, total = 0): PaginatedResult {
+  return {
+    articles: [],
+    page,
+    pageSize,
+    total,
+    totalPages: total > 0 ? Math.ceil(total / pageSize) : 0,
+    hasPrev: page > 1,
+    hasNext: false,
+  };
+}
+
+function pageResult(articles: ArticleCardData[], page: number, pageSize: number, total: number): PaginatedResult {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  return { articles, page, pageSize, total, totalPages, hasPrev: page > 1, hasNext: page < totalPages };
+}
+
 /**
  * Offset-based pagination for category listings. Uses page numbers so that
  * "Previous" navigates to `page - 1` (not back to page 1 like the previous
- * cursor-only scheme).
+ * cursor-only scheme). `cache()` — generateMetadata i page wołają z tymi
+ * samymi argumentami (metadane sprawdzają zakres stron), jedno zapytanie.
  */
-export async function getArticlesByCategoryPaginated(
+export const getArticlesByCategoryPaginated = cache(async (
   categorySlug: string,
   pageSize = 12,
   page = 1,
-): Promise<PaginatedResult> {
+): Promise<PaginatedResult> => {
   const safePage = Math.max(1, Math.floor(page) || 1);
 
   // `getCategoryBySlug` jest owinięte w React cache() — generateMetadata,
   // page i ta funkcja współdzielą jeden query na request.
   const category = await getCategoryBySlug(categorySlug);
-
-  if (!category) {
-    return { articles: [], page: safePage, pageSize, total: 0, totalPages: 0, hasPrev: false, hasNext: false };
-  }
+  if (!category) return emptyPage(safePage, pageSize);
 
   const { count } = await db()
     .from("articles")
-    .select("*", { count: "exact", head: true })
+    .select("id", { count: "exact", head: true })
     .eq("is_published", true)
     .eq("category_id", category.id);
 
   const total = count || 0;
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const from = (safePage - 1) * pageSize;
-  const to = from + pageSize - 1;
+  if (total === 0 || from >= total) return emptyPage(safePage, pageSize, total);
 
-  if (total === 0 || from >= total) {
-    return { articles: [], page: safePage, pageSize, total, totalPages, hasPrev: safePage > 1, hasNext: false };
-  }
-
-  const { data: articles, error } = await db()
+  const { data, error } = await db()
     .from("articles")
-    .select("*, category:categories(*)")
+    .select(CARD_COLUMNS)
     .eq("is_published", true)
     .eq("category_id", category.id)
     // Tiebreaker po `id` — bez niego artykuły publikowane w tej samej sekundzie
@@ -153,30 +169,18 @@ export async function getArticlesByCategoryPaginated(
     // (duplikaty/przeskoki dla użytkownika i crawlera).
     .order("published_at", { ascending: false })
     .order("id", { ascending: false })
-    .range(from, to);
+    .range(from, from + pageSize - 1);
 
-  if (error || !articles || articles.length === 0) {
+  if (error || !data || data.length === 0) {
     if (error) console.error("[data] getArticlesByCategoryPaginated failed:", error.message);
-    return { articles: [], page: safePage, pageSize, total, totalPages, hasPrev: safePage > 1, hasNext: false };
+    return emptyPage(safePage, pageSize, total);
   }
-
-  const withTags = await attachTagsBatch(articles);
-
-  return {
-    articles: withTags,
-    page: safePage,
-    pageSize,
-    total,
-    totalPages,
-    hasPrev: safePage > 1,
-    hasNext: safePage < totalPages,
-  };
-}
+  return pageResult(toCards(data), safePage, pageSize, total);
+});
 
 // `cache()` from React 19 deduplicates calls within the same request — so
-// when the root layout AND the home page both call `getCategories()` we only
-// hit Supabase once. Each request gets its own cache; nothing leaks across
-// requests. Same pattern below for `getTickerArticles` and `getPopularTags`.
+// when several server components need the categories we only hit Supabase
+// once. Each request gets its own cache; nothing leaks across requests.
 export const getCategories = cache(async (): Promise<Category[]> => {
   const { data, error } = await db()
     .from("categories")
@@ -213,22 +217,21 @@ export const getCategoryBySlug = cache(async (slug: string): Promise<Category | 
  * 1. **FTS przez `articles.search_vector`** (migracja 004) — indeksowany
  *    GIN, O(log n). Każde słowo zapytania jest prefix-matched (`term:*`),
  *    łączone AND-em — "open ai" znajduje artykuły z "openai" i "AI" jednocześnie.
- * 2. **Fallback trigram ILIKE na title** — gdy FTS zwróci 0 wyników
- *    (literówki, słowa spoza katalogu). `idx_articles_title_trgm` (GIN
- *    gin_trgm_ops) obsługuje to w O(log n).
+ * 2. **Fallback ILIKE na title** — gdy FTS zwróci 0 wyników (fraza
+ *    w środku wyrazu, interpunkcja: "open-source"). Literówek nie łapie
+ *    (to byłoby `similarity()`); `idx_articles_title_trgm` (GIN
+ *    gin_trgm_ops) przyspiesza `%fraza%` z O(n) do indeksu.
  *
  * Bez migracji 004 FTS zwraca błąd — wtedy też lecimy na ILIKE fallback
  * (gracefulnie). Dzięki temu deploy kodu może wyprzedzić aplikację
  * migracji bez padania UX.
  */
-export async function searchArticles(query: string): Promise<ArticleWithRelations[]> {
+export async function searchArticles(query: string): Promise<ArticleCardData[]> {
   const safe = sanitizeTsQuery(query);
   if (!safe) return [];
 
   // Build prefix tsquery: "open ai" → "open:* & ai:*"
   const tsQuery = safe.split(" ").filter(Boolean).map((t) => `${t}:*`).join(" & ");
-
-  let articles: (Article & { category: Category | null })[] = [];
 
   // Stage 1: FTS. `config: "simple"` MUSI się zgadzać z konfiguracją, którą
   // zbudowano `search_vector` (migracja 004) — bez tego parametru zapytanie
@@ -236,7 +239,7 @@ export async function searchArticles(query: string): Promise<ArticleWithRelation
   // polskie słowa ("i", "a", "to", "do", "on"...).
   const ftsRes = await db()
     .from("articles")
-    .select("*, category:categories(*)")
+    .select(CARD_COLUMNS)
     .eq("is_published", true)
     .textSearch("search_vector", tsQuery, { config: "simple" })
     .order("published_at", { ascending: false })
@@ -246,8 +249,8 @@ export async function searchArticles(query: string): Promise<ArticleWithRelation
     // Migracja 004 mogła nie być jeszcze zaaplikowana (search_vector nie istnieje)
     // — log warn, lecimy od razu na ILIKE.
     console.warn("[data] searchArticles FTS failed, falling back to ILIKE:", ftsRes.error.message);
-  } else if (ftsRes.data) {
-    articles = ftsRes.data;
+  } else if (ftsRes.data && ftsRes.data.length > 0) {
+    return toCards(ftsRes.data);
   }
 
   // Stage 2: trigram ILIKE fallback przy 0 wyników z FTS. Celowo na SUROWYM
@@ -255,76 +258,56 @@ export async function searchArticles(query: string): Promise<ArticleWithRelation
   // interpunkcję, więc "open-source" stałoby się "open source" i ILIKE nigdy
   // nie trafiłoby tytułu zawierającego myślnik. escapeIlike wystarcza tu
   // za całą sanityzację (parametr jest bindowany, nie sklejany w SQL).
-  if (articles.length === 0) {
-    const ilikeRes = await db()
-      .from("articles")
-      .select("*, category:categories(*)")
-      .eq("is_published", true)
-      .ilike("title", `%${escapeIlike(query.trim())}%`)
-      .order("published_at", { ascending: false })
-      .limit(20);
-    if (ilikeRes.error) {
-      console.error("[data] searchArticles ILIKE fallback failed:", ilikeRes.error.message);
-      return [];
-    }
-    articles = ilikeRes.data ?? [];
+  const ilikeRes = await db()
+    .from("articles")
+    .select(CARD_COLUMNS)
+    .eq("is_published", true)
+    .ilike("title", `%${escapeIlike(query.trim())}%`)
+    .order("published_at", { ascending: false })
+    .limit(20);
+  if (ilikeRes.error) {
+    console.error("[data] searchArticles ILIKE fallback failed:", ilikeRes.error.message);
+    return [];
   }
-
-  if (articles.length === 0) return [];
-
-  return attachTagsBatch(articles);
+  return toCards(ilikeRes.data);
 }
 
 /**
  * Articles for the home page category sections: one small indexed query per
- * category, in parallel, then a single batched tag fetch.
+ * category, in parallel.
  *
  * Wcześniejsza wersja ciągnęła jedną wspólną pulę 360 najnowszych artykułów
  * i grupowała w pamięci — kategoria, której najnowszy artykuł wypadł poza
  * pulą (≈ miesiąc bez publikacji), znikała z home w całości. Per-kategoria
- * limit nie ma tej wady i jest tańszy (6 × `limit 4` na indeksie zamiast
+ * limit nie ma tej wady i jest tańszy (6 × `limit N` na indeksie zamiast
  * jednego skanu 360 rzędów).
  */
 export async function getArticlesGroupedByCategory(
   categorySlugs: string[],
   limitPerCategory = 4
-): Promise<Record<string, ArticleWithRelations[]>> {
-  const { data: categories, error: catError } = await db()
-    .from("categories")
-    .select("id, slug")
-    .in("slug", categorySlugs);
-
-  if (catError || !categories || categories.length === 0) return {};
+): Promise<Record<string, ArticleCardData[]>> {
+  const wanted = new Set(categorySlugs);
+  const categories = (await getCategories()).filter((c) => wanted.has(c.slug));
+  if (categories.length === 0) return {};
 
   const perCategory = await Promise.all(
     categories.map(async (cat) => {
       const { data, error } = await db()
         .from("articles")
-        .select("*, category:categories(*)")
+        .select(CARD_COLUMNS)
         .eq("is_published", true)
         .eq("category_id", cat.id)
         .order("published_at", { ascending: false })
         .order("id", { ascending: false })
         .limit(limitPerCategory);
-      if (error) {
-        console.error(`[data] getArticlesGroupedByCategory(${cat.slug}) failed:`, error.message);
-        return { slug: cat.slug, articles: [] };
-      }
-      return { slug: cat.slug, articles: data ?? [] };
+      if (error) throw dbFailure(`getArticlesGroupedByCategory(${cat.slug})`, error);
+      return [cat.slug, toCards(data)] as const;
     })
   );
 
-  // Batch tags for all articles at once
-  const allArticles = perCategory.flatMap((g) => g.articles);
-  const withTags = await attachTagsBatch(allArticles);
-  const taggedMap = new Map(withTags.map((a) => [a.id, a]));
-
-  const result: Record<string, ArticleWithRelations[]> = {};
-  for (const group of perCategory) {
-    if (group.articles.length === 0) continue;
-    result[group.slug] = group.articles
-      .map((a) => taggedMap.get(a.id))
-      .filter((a): a is ArticleWithRelations => Boolean(a));
+  const result: Record<string, ArticleCardData[]> = {};
+  for (const [slug, articles] of perCategory) {
+    if (articles.length > 0) result[slug] = articles;
   }
   return result;
 }
@@ -351,15 +334,18 @@ export const getPopularTags = cache(async (limit = 10): Promise<Tag[]> => {
   // pojedynczy select na article_tags liczyłby popularność z wycinka danych
   // (produkcja 2026-08-12: 6388 wierszy → ranking z ~16% próbki i „trendy"
   // niezgodne z realną popularnością). Stronicujemy z deterministycznym
-  // ORDER BY po kluczu złożonym; cap 20k wierszy to margines ~3× nad obecnym
-  // wolumenem — do tego czasu RPC powinno być zaaplikowane (migracja 001).
+  // ORDER BY po kluczu złożonym; cap 20k wierszy to margines ~2× nad obecnym
+  // wolumenem (2026-10: ~9k) — do tego czasu RPC powinno być zaaplikowane
+  // (migracja 001).
   const BATCH = 1000;
   const MAX_ROWS = 20_000;
   const countRows: { tag_id: string }[] = [];
   for (let from = 0; from < MAX_ROWS; from += BATCH) {
+    // `articles!inner` + RLS anon (SELECT tylko `is_published`) odcina tagi
+    // artykułów zdjętych w /admin — ta sama semantyka co RPC po migracji 006.
     const { data, error } = await db()
       .from("article_tags")
-      .select("article_id, tag_id")
+      .select("article_id, tag_id, articles!inner(id)")
       .order("article_id", { ascending: true })
       .order("tag_id", { ascending: true })
       .range(from, from + BATCH - 1);
@@ -403,24 +389,23 @@ export const getPopularTags = cache(async (limit = 10): Promise<Tag[]> => {
  * `.limit(5000)` zwracało dokładnie 1000 rzędów — przy >1000 artykułów
  * sitemap po cichu gubił wszystkie starsze. Stronicujemy przez `.range()`.
  */
-export async function getSitemapArticles(limit = 5000): Promise<{ slug: string; updated_at: string; is_featured: boolean }[]> {
+export async function getSitemapArticles(limit = 5000): Promise<{ slug: string; updated_at: string }[]> {
   const BATCH = 1000;
-  const all: { slug: string; updated_at: string; is_featured: boolean }[] = [];
+  const all: { slug: string; updated_at: string }[] = [];
 
   for (let from = 0; from < limit; from += BATCH) {
     const to = Math.min(from + BATCH, limit) - 1;
     const { data, error } = await db()
       .from("articles")
-      .select("slug, updated_at, is_featured")
+      .select("slug, updated_at")
       .eq("is_published", true)
       .order("published_at", { ascending: false })
       .order("id", { ascending: false })
       .range(from, to);
 
-    if (error) {
-      console.error("[data] getSitemapArticles failed:", error.message);
-      break;
-    }
+    // Rzucamy zamiast zwracać niepełną listę — sitemapa z ucięciem w połowie
+    // zostałaby zcache'owana na godzinę (revalidate w sitemap.ts).
+    if (error) throw dbFailure("getSitemapArticles", error);
     all.push(...(data ?? []));
     // Niepełny batch = koniec danych.
     if (!data || data.length < to - from + 1) break;
@@ -467,23 +452,18 @@ export const getTagBySlug = cache(async (slug: string): Promise<Tag | null> => {
  *
  * Filtr przez embedded resource `article_tags!inner` + `.eq()` na kolumnie
  * joina: jeden indeksowany JOIN po `idx_article_tags_tag_id` i `count:
- * "exact"` z prawdziwą liczbą wpisów. Poprzednia wersja ciągnęła listę
- * article_id osobnym zapytaniem (PostgREST tnie każdą odpowiedź do 1000
- * rzędów — popularny tag po cichu gubiłby starsze artykuły) i miała twardy
- * `limit 50`, przez co strona tagu zawsze pokazywała „50 artykułów".
+ * "exact"` z prawdziwą liczbą wpisów (zamiast listy article_id ciętej przez
+ * limit 1000 wierszy PostgREST).
  */
-export async function getArticlesByTagPaginated(
+export const getArticlesByTagPaginated = cache(async (
   tagSlug: string,
   pageSize = 12,
   page = 1,
-): Promise<PaginatedResult> {
+): Promise<PaginatedResult> => {
   const safePage = Math.max(1, Math.floor(page) || 1);
 
   const tag = await getTagBySlug(tagSlug);
-
-  if (!tag) {
-    return { articles: [], page: safePage, pageSize, total: 0, totalPages: 0, hasPrev: false, hasNext: false };
-  }
+  if (!tag) return emptyPage(safePage, pageSize);
 
   const { count } = await db()
     .from("articles")
@@ -492,41 +472,25 @@ export async function getArticlesByTagPaginated(
     .eq("article_tags.tag_id", tag.id);
 
   const total = count || 0;
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const from = (safePage - 1) * pageSize;
-  const to = from + pageSize - 1;
+  if (total === 0 || from >= total) return emptyPage(safePage, pageSize, total);
 
-  if (total === 0 || from >= total) {
-    return { articles: [], page: safePage, pageSize, total, totalPages, hasPrev: safePage > 1, hasNext: false };
-  }
-
-  const { data: articles, error } = await db()
+  const { data, error } = await db()
     .from("articles")
-    .select("*, category:categories(*), article_tags!inner(tag_id)")
+    .select(`${CARD_COLUMNS}, article_tags!inner(tag_id)`)
     .eq("is_published", true)
     .eq("article_tags.tag_id", tag.id)
     // Tiebreaker po `id` — jak w kategorii (stabilne strony paginacji).
     .order("published_at", { ascending: false })
     .order("id", { ascending: false })
-    .range(from, to);
+    .range(from, from + pageSize - 1);
 
-  if (error || !articles || articles.length === 0) {
+  if (error || !data || data.length === 0) {
     if (error) console.error("[data] getArticlesByTagPaginated failed:", error.message);
-    return { articles: [], page: safePage, pageSize, total, totalPages, hasPrev: safePage > 1, hasNext: false };
+    return emptyPage(safePage, pageSize, total);
   }
-
-  const withTags = await attachTagsBatch(articles);
-
-  return {
-    articles: withTags,
-    page: safePage,
-    pageSize,
-    total,
-    totalPages,
-    hasPrev: safePage > 1,
-    hasNext: safePage < totalPages,
-  };
-}
+  return pageResult(toCards(data), safePage, pageSize, total);
+});
 
 // ===================== ADJACENT ARTICLES =====================
 
@@ -640,55 +604,79 @@ export async function getAdjacentArticles(
 // ===================== RELATED ARTICLES =====================
 
 /**
- * Pick `count` articles to show under "Podobne publikacje" on the article page.
+ * "Podobne publikacje" — realnie powiązane tematycznie, nie losowe.
  *
- * Goal: always show the full set (default 3) and maximise variety, even when
- * the current article's category is sparse. We pull recent posts (last 7 days
- * first, widening to 30/90 days, then all-time) excluding the current article,
- * shuffle in memory, and slice. This sidesteps PostgREST not exposing
- * `ORDER BY random()`.
+ * 1. Kandydaci: 40 najnowszych artykułów dzielących z bieżącym ≥1 tag
+ *    (`article_tags!inner` z filtrem `in` zwraca per artykuł tylko PASUJĄCE
+ *    wiersze, więc ich liczba = liczba wspólnych tagów).
+ * 2. Ranking: więcej wspólnych tagów wyżej; remis → nowszy (sort stabilny
+ *    zachowuje kolejność po dacie z zapytania).
+ * 3. Dopełnienie (artykuł bez tagów / niszowy temat): najnowsze z tej samej
+ *    kategorii, a w ostateczności najnowsze w ogóle.
+ *
+ * Deterministyczne (poprzednia wersja tasowała losowo pulę 50 PEŁNYCH
+ * artykułów z treścią — ~350 KB z bazy na każdy render i zmienne linki
+ * przy każdej regeneracji ISR). Spójne klastry tematyczne to silniejszy
+ * sygnał linkowania wewnętrznego dla Google i lepsza ścieżka dla czytelnika.
  */
 export async function getRelatedArticles(
-  currentArticleId: string,
+  article: { id: string; category_id: string | null; tags: Pick<Tag, "id">[] },
   count = 3
-): Promise<ArticleWithRelations[]> {
-  const windows = [7, 30, 90, null] as const; // days; null = no time filter
+): Promise<ArticleCardData[]> {
+  const picked: ArticleCardData[] = [];
+  const seen = new Set<string>([article.id]);
+  const take = (rows: ArticleCardData[]) => {
+    for (const row of rows) {
+      if (picked.length >= count) return;
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
+      picked.push(row);
+    }
+  };
 
-  for (const days of windows) {
-    let query = db()
+  const tagIds = article.tags.map((t) => t.id);
+  if (tagIds.length > 0) {
+    const { data, error } = await db()
       .from("articles")
-      .select("*, category:categories(*)")
+      .select(`${CARD_COLUMNS}, article_tags!inner(tag_id)`)
       .eq("is_published", true)
-      .neq("id", currentArticleId)
+      .neq("id", article.id)
+      .in("article_tags.tag_id", tagIds)
       .order("published_at", { ascending: false })
-      // Pull a healthy candidate pool so the shuffle has variety.
-      .limit(50);
-
-    if (days !== null) {
-      const since = new Date(Date.now() - days * 24 * 3600 * 1000).toISOString();
-      query = query.gte("published_at", since);
-    }
-
-    const { data: articles, error } = await query;
+      .limit(40);
     if (error) {
-      console.error("[data] getRelatedArticles failed:", error.message);
-      return [];
+      console.error("[data] getRelatedArticles (tags) failed:", error.message);
+    } else {
+      // supabase-js bez wygenerowanych typów zgaduje embed `category` jako
+      // tablicę — dla relacji many-to-one PostgREST zwraca obiekt.
+      const ranked = [...((data ?? []) as unknown as WithTagMatches[])].sort(
+        (a, b) => (b.article_tags?.length ?? 0) - (a.article_tags?.length ?? 0)
+      );
+      take(ranked.map(toCard));
     }
-    // Za mało kandydatów → poszerz okno czasowe. W ostatnim oknie (all-time)
-    // bierzemy co jest — lepiej pokazać 2 podobne niż ukryć sekcję.
-    if (!articles || articles.length === 0) continue;
-    if (articles.length < count && days !== null) continue;
-
-    // Fisher-Yates shuffle, then take `count`.
-    const pool = [...articles];
-    for (let i = pool.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [pool[i], pool[j]] = [pool[j], pool[i]];
-    }
-    return attachTagsBatch(pool.slice(0, count));
   }
 
-  return [];
+  const fill = async (categoryId: string | null) => {
+    if (picked.length >= count) return;
+    let query = db()
+      .from("articles")
+      .select(CARD_COLUMNS)
+      .eq("is_published", true)
+      .neq("id", article.id);
+    if (categoryId) query = query.eq("category_id", categoryId);
+    const { data, error } = await query
+      .order("published_at", { ascending: false })
+      .limit(count + picked.length);
+    if (error) {
+      console.error("[data] getRelatedArticles (fill) failed:", error.message);
+      return;
+    }
+    take(toCards(data));
+  };
+
+  if (article.category_id) await fill(article.category_id);
+  await fill(null);
+  return picked;
 }
 
 // ===================== SITEMAP HELPERS =====================
@@ -696,8 +684,8 @@ export async function getRelatedArticles(
 /**
  * Artykuły z ostatnich 48 h dla `/news-sitemap.xml` (Google News / Discover).
  * Google czyta z news-sitemapy tylko wpisy młodsze niż 48 h — starsze i tak
- * ignoruje, więc nie ma sensu ich zgłaszać. Limit 100 to margines ~16× nad
- * realnym wolumenem (6/dzień → ~12 wpisów w oknie), grubo poniżej limitu
+ * ignoruje, więc nie ma sensu ich zgłaszać. Limit 100 to margines ~5× nad
+ * realnym wolumenem (9/dzień → ~18 wpisów w oknie), grubo poniżej limitu
  * PostgREST (1000), więc stronicowanie nie jest tu potrzebne.
  */
 export async function getNewsSitemapArticles(): Promise<
@@ -712,10 +700,7 @@ export async function getNewsSitemapArticles(): Promise<
     .order("published_at", { ascending: false })
     .limit(100);
 
-  if (error) {
-    console.error("[data] getNewsSitemapArticles failed:", error.message);
-    return [];
-  }
+  if (error) throw dbFailure("getNewsSitemapArticles", error);
   return (data || []).filter(
     (a): a is { slug: string; title: string; published_at: string } =>
       Boolean(a.slug && a.title && a.published_at)

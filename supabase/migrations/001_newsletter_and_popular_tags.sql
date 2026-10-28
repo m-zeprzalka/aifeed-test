@@ -1,20 +1,12 @@
--- Migration 001 — newsletter_subscribers + popular_tags RPC
+-- Migration 001 — popular_tags RPC
 -- =============================================================================
 -- Apply once in Supabase SQL Editor (dashboard → SQL Editor → New query → paste → Run).
--- Idempotent: `IF NOT EXISTS` / `CREATE OR REPLACE` — safe to re-run.
+-- Idempotent: `CREATE OR REPLACE` — safe to re-run. Definicję doprecyzowuje 006.
+--
+-- Pierwotnie migracja tworzyła też tabelę `newsletter_subscribers`. Usunięta
+-- 2026-10-28, zanim trafiła na produkcję: adresy subskrybentów trzyma
+-- wyłącznie MailerLite — baza nie przechowuje e-maili.
 -- =============================================================================
-
--- Tabela subskrybentów newslettera. Service role ONLY (no public policy) —
--- zapis i odczyt wyłącznie przez admin client.
-CREATE TABLE IF NOT EXISTS newsletter_subscribers (
-  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  email TEXT NOT NULL UNIQUE,
-  subscribed_at TIMESTAMPTZ DEFAULT now(),
-  unsubscribed_at TIMESTAMPTZ
-);
-
-ALTER TABLE newsletter_subscribers ENABLE ROW LEVEL SECURITY;
--- Celowo brak publicznych policy — dostęp tylko przez service role key.
 
 -- RPC: agreguje top N tagów po użyciu (server-side GROUP BY).
 -- Używane przez getPopularTags() w src/lib/data.ts zamiast pobierania

@@ -1,8 +1,8 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logPipelineEvent } from "@/lib/telemetry";
-import { safeFetch, readTextCapped, validateExternalUrl } from "@/lib/scraper/safe-fetch";
+import { safeFetch } from "@/lib/scraper/safe-fetch";
+import { OPENROUTER_API_URL, openRouterCostUsd, openRouterHeaders } from "@/lib/ai/openrouter";
 
-const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 const IMAGE_MODEL = "google/gemini-2.5-flash-image";
 
 export interface ThumbnailResult {
@@ -10,29 +10,51 @@ export interface ThumbnailResult {
   source: string | null; // null = AI-generated, string = source site attribution
 }
 
+/** Kandydat na miniaturę z JEDNEGO pobrania strony źródłowej (`scrapeSourcePage`). */
+export interface SourceImageCandidate {
+  sourceUrl: string;
+  /** og:image już po walidacji SSRF (`validateExternalUrl`) albo null. */
+  ogImage: string | null;
+  siteName: string | null;
+}
+
+export interface ThumbnailOptions {
+  /** Gdy przekazany, koszt generacji AI trafia do `pipeline_events`. */
+  runId?: string;
+  /** Termin budżetu funkcji (epoch ms) — generacja AI nie może go przekroczyć. */
+  deadline?: number;
+}
+
+const AI_IMAGE_TIMEOUT_MS = 90_000;
+// Poniżej tego czasu nie zaczynamy płatnej generacji — i tak by nie zdążyła.
+const MIN_AI_IMAGE_MS = 20_000;
+
 /**
  * Two-step thumbnail strategy:
- * 1. Scrape og:image from source article (FREE)
- * 2. Generate with AI via OpenRouter as fallback (paid)
+ * 1. og:image ze źródła (darmowe) — także grafiki stockowe i logo serwisu
+ *    (np. arXiv): decyzja właściciela 2026-10-28, zob. ROADMAP D3,
+ * 2. generacja AI przez OpenRouter (płatna) — tylko gdy źródło nie ma
+ *    og:image albo obraz nie przechodzi walidacji.
  */
 export async function getArticleThumbnail(
   title: string,
-  sourceUrl: string,
-  // Opcjonalny — gdy przekazany, logujemy koszt AI image gen do
-  // `pipeline_events` (event: `ai_cost`, type: `image`).
-  runId?: string,
+  candidate: SourceImageCandidate,
+  options: ThumbnailOptions = {},
 ): Promise<ThumbnailResult> {
-  // Step 1: Try scraping og:image from source (free)
-  console.log("[Thumbnail] Trying og:image scrape from source...");
-  const scraped = await scrapeOgImage(sourceUrl);
-  if (scraped) {
-    console.log(`[Thumbnail] Found og:image from ${scraped.siteName}`);
-    return { url: scraped.imageUrl, source: scraped.siteName };
+  const sourceImage = await pickSourceImage(candidate);
+  if (sourceImage) {
+    console.log(`[Thumbnail] Using og:image from ${sourceImage.source}`);
+    return sourceImage;
   }
 
-  // Step 2: Generate with AI via OpenRouter
-  console.log("[Thumbnail] No og:image found, generating with AI...");
-  const aiUrl = await generateAIImage(title, runId);
+  const timeoutMs = Math.min(AI_IMAGE_TIMEOUT_MS, (options.deadline ?? Infinity) - Date.now());
+  if (timeoutMs < MIN_AI_IMAGE_MS) {
+    console.warn("[Thumbnail] Brak czasu w budżecie na generację AI — artykuł bez miniatury (placeholder)");
+    return { url: "", source: null };
+  }
+
+  console.log("[Thumbnail] No usable og:image, generating with AI...");
+  const aiUrl = await generateAIImage(title, timeoutMs, options.runId);
   if (aiUrl) {
     console.log("[Thumbnail] AI image generated and stored in Supabase Storage");
     return { url: aiUrl, source: null };
@@ -43,80 +65,44 @@ export async function getArticleThumbnail(
   return { url: "", source: null };
 }
 
-// --------------- OG:IMAGE SCRAPER ---------------
-
-// Strony z og:image potrafią być ciężkie; meta tagi są w <head>, więc 1 MB
-// w zupełności wystarcza do ich znalezienia.
-const MAX_OG_HTML_BYTES = 1024 * 1024;
+// --------------- OG:IMAGE ---------------
 
 /**
- * Obie warstwy fetch (strona źródłowa + HEAD na og:image) idą przez
- * `safeFetch` — og:image to atakowalny wektor SSRF: strona osiągalna przez
- * feed może wskazać `content="http://169.254.169.254/..."` i bez walidacji
- * serwer wykonałby żądanie do hosta wewnętrznego, a URL wylądowałby w DB
- * jako thumbnail.
+ * og:image przechodzi, gdy HEAD przez `safeFetch` (walidacja każdego hopu
+ * przekierowania — og:image kontroluje autor strony, to wektor SSRF)
+ * potwierdza obraz, a nie tracking pixel.
  */
-async function scrapeOgImage(
-  sourceUrl: string
-): Promise<{ imageUrl: string; siteName: string } | null> {
+async function pickSourceImage(candidate: SourceImageCandidate): Promise<ThumbnailResult | null> {
+  const { ogImage } = candidate;
+  if (!ogImage) return null;
+
   try {
-    const res = await safeFetch(sourceUrl, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (compatible; AiFeedBot/1.0; +https://aifeed.pl)",
-      },
-      timeoutMs: 10_000,
-    });
-    if (!res || !res.ok) return null;
-
-    const html = await readTextCapped(res, MAX_OG_HTML_BYTES);
-
-    // Extract og:image — handle both attribute orders
-    const ogImage =
-      html.match(
-        /<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i
-      )?.[1] ||
-      html.match(
-        /<meta[^>]*content=["']([^"']+)["'][^>]*property=["']og:image["']/i
-      )?.[1];
-
-    if (!ogImage) return null;
-
-    // Resolve relative URLs + pełna walidacja SSRF (og:image jest treścią
-    // atakowalną — kontroluje ją autor strony źródłowej, nie my).
-    const imageUrlParsed = validateExternalUrl(ogImage, new URL(sourceUrl));
-    if (!imageUrlParsed) return null;
-    const imageUrl = imageUrlParsed.href;
-
-    // Validate image is accessible and not a tracking pixel
-    try {
-      const head = await safeFetch(imageUrl, { method: "HEAD", timeoutMs: 5_000 });
-      if (!head) return null; // odrzucone przez guard (np. redirect do środka)
-      if (!head.ok) return null;
-
+    const head = await safeFetch(ogImage, { method: "HEAD", timeoutMs: 5_000 });
+    if (!head) return null; // odrzucone przez guard (np. redirect do środka)
+    if (!head.ok) {
+      // Część CDN-ów nie obsługuje HEAD (405) — wtedy ufamy og:image.
+      if (head.status !== 405) return null;
+    } else {
       const contentType = head.headers.get("content-type") || "";
       if (!contentType.startsWith("image/")) return null;
-
-      const size = parseInt(head.headers.get("content-length") || "0");
-      if (size > 0 && size < 5_000) return null; // skip tiny tracking pixels
-    } catch {
-      // Some CDNs block HEAD — still try using the URL
+      const size = parseInt(head.headers.get("content-length") || "0", 10);
+      if (size > 0 && size < 5_000) return null; // tracking pixel / ikona
     }
+  } catch {
+    // Timeout/zerwane połączenie na HEAD — og:image przeszedł walidację
+    // SSRF przy ekstrakcji, a UI ma fallback onError; nie przepalamy
+    // generacji AI z powodu kaprysu CDN-a.
+  }
 
-    // Extract site name for attribution
-    const siteName =
-      html.match(
-        /<meta[^>]*property=["']og:site_name["'][^>]*content=["']([^"']+)["']/i
-      )?.[1] ||
-      html.match(
-        /<meta[^>]*content=["']([^"']+)["'][^>]*property=["']og:site_name["']/i
-      )?.[1] ||
-      new URL(sourceUrl).hostname.replace("www.", "");
+  const source = candidate.siteName || hostnameLabel(candidate.sourceUrl);
+  return { url: ogImage, source };
+}
 
-    return { imageUrl, siteName };
-  } catch (error) {
-    console.warn("[Thumbnail] Scrape failed:", error);
-    return null;
+function hostnameLabel(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "źródło";
   }
 }
 
@@ -137,7 +123,7 @@ function sanitizeTitleForPrompt(title: string): string {
     .slice(0, 200);                         // hard cap on prompt-injected length
 }
 
-async function generateAIImage(title: string, runId?: string): Promise<string | null> {
+async function generateAIImage(title: string, timeoutMs: number, runId?: string): Promise<string | null> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
     console.warn("[Thumbnail] OPENROUTER_API_KEY not set, skipping AI generation");
@@ -162,13 +148,7 @@ Requirements:
   try {
     const res = await fetch(OPENROUTER_API_URL, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer":
-          process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000",
-        "X-Title": "AiFeed",
-      },
+      headers: openRouterHeaders(apiKey),
       body: JSON.stringify({
         model: IMAGE_MODEL,
         messages: [{ role: "user", content: prompt }],
@@ -176,7 +156,7 @@ Requirements:
         // Jawnie proś o dane kosztowe — zob. komentarz w writer.ts.
         usage: { include: true },
       }),
-      signal: AbortSignal.timeout(90_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
 
     if (!res.ok) {
@@ -198,7 +178,7 @@ Requirements:
         prompt_tokens: data.usage.prompt_tokens,
         completion_tokens: data.usage.completion_tokens,
         total_tokens: data.usage.total_tokens,
-        cost_usd: data.usage.total_cost,
+        cost_usd: openRouterCostUsd(data.usage),
         title,
       });
     }

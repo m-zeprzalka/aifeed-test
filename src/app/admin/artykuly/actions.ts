@@ -29,21 +29,40 @@ async function assertAdmin(): Promise<ActionResult | null> {
   return null;
 }
 
+/**
+ * Po zmianie widoczności artykułu odświeżamy wszystko, co go pokazuje:
+ * jego stronę (inaczej zdjęty tekst wisiał w cache ISR do kolejnej
+ * regeneracji), listy i sitemapy. Slug pobieramy PRZED mutacją (delete).
+ */
+async function articleSlug(id: string): Promise<string | null> {
+  const { data } = await createAdminClient().from("articles").select("slug").eq("id", id).maybeSingle();
+  return data?.slug ?? null;
+}
+
+function revalidateArticleSurfaces(slug: string | null) {
+  if (slug) revalidatePath(`/artykul/${slug}`);
+  revalidatePath("/admin/artykuly");
+  revalidatePath("/");
+  revalidatePath("/kategoria/[slug]", "page");
+  revalidatePath("/sitemap.xml");
+  revalidatePath("/news-sitemap.xml");
+  revalidatePath("/feed.xml");
+}
+
 export async function deleteArticleAction(id: string): Promise<ActionResult> {
   const denied = await assertAdmin();
   if (denied) return denied;
   if (!id || typeof id !== "string") {
     return { ok: false, error: "Nieprawidłowe id artykułu" };
   }
-  const supabase = createAdminClient();
-  const { error } = await supabase.from("articles").delete().eq("id", id);
+  const slug = await articleSlug(id);
+  const { error } = await createAdminClient().from("articles").delete().eq("id", id);
   if (error) {
     console.error("[admin] deleteArticleAction failed:", error.message);
     return { ok: false, error: error.message };
   }
   // article_tags ma ON DELETE CASCADE — joiny sprzątają się same.
-  revalidatePath("/admin/artykuly");
-  revalidatePath("/");
+  revalidateArticleSurfaces(slug);
   return { ok: true };
 }
 
@@ -53,21 +72,22 @@ export async function togglePublishedAction(
 ): Promise<ActionResult> {
   const denied = await assertAdmin();
   if (denied) return denied;
-  if (!id || typeof id !== "string") {
-    return { ok: false, error: "Nieprawidłowe id artykułu" };
+  // Argumenty Server Action przychodzą z sieci — walidujemy typy, nie ufamy TS.
+  if (!id || typeof id !== "string" || typeof next !== "boolean") {
+    return { ok: false, error: "Nieprawidłowe parametry" };
   }
-  const supabase = createAdminClient();
   // Przy unpublish nie ruszamy published_at — zachowujemy oryginalną datę
   // na wypadek republish, żeby kolejność czasowa miała sens.
-  const { error } = await supabase
+  const { data, error } = await createAdminClient()
     .from("articles")
     .update({ is_published: next })
-    .eq("id", id);
+    .eq("id", id)
+    .select("slug")
+    .maybeSingle();
   if (error) {
     console.error("[admin] togglePublishedAction failed:", error.message);
     return { ok: false, error: error.message };
   }
-  revalidatePath("/admin/artykuly");
-  revalidatePath("/");
+  revalidateArticleSurfaces(data?.slug ?? null);
   return { ok: true };
 }

@@ -1,270 +1,339 @@
-# AiFeed — Roadmapa: produkcja, SEO i monetyzacja
+# AiFeed — Roadmapa: wdrożenie, decyzje, SEO, rozwój i monetyzacja
 
-> **Status:** wersja 2.2 · 2026-08-11
-> **Zastępuje:** `AUDIT.md` (audyt z 2026-05, w całości zrealizowany lub przeniesiony tutaj)
-> **Stan serwisu:** 1340+ opublikowanych artykułów, pipeline 3×3/dzień na Claude Sonnet 5, kod po pełnym audycie (0 podatności npm — git log 2026-08-10) + audycie SEO i pakiecie jakościowym (git log 2026-08-11)
+> **Status:** wersja 3.0 · 2026-10-28
+> **Stan serwisu:** 1905 opublikowanych artykułów · 2618 tagów · pipeline 3×3/dzień na Claude Sonnet 5 · 22 źródła RSS · ruch rośnie
+> **Stan kodu:** po audycie i refaktoryzacji 2026-10-28 (§1) — Next 16.4.3, 0 podatności produkcyjnych, 131 testów, CI · wdrożone 2026-10-28 · baza: migracje 001 → 007 wgrane
 
-To jest **kanoniczny dokument planowania**. `README.md` opisuje stan obecny (architektura, uruchomienie), ten plik opisuje przyszłość: co zrobić, w jakiej kolejności i dlaczego.
+To jest **kanoniczny dokument planowania**. `README.md` opisuje stan obecny (architektura, uruchomienie), ten plik — co zrobić, w jakiej kolejności i dlaczego. Punkty oznaczone **[DECYZJA]** czekają na Twoją decyzję; przy każdym jest rekomendacja.
 
 ---
 
 ## Spis treści
 
-1. [Co zrobił audyt 2026-08-10 (skrót)](#1-co-zrobił-audyt-2026-08-10)
-2. [Wdrożenie na produkcję — krok po kroku](#2-wdrożenie-na-produkcję)
-3. [Strategia SEO — wyjście z szuflady „AI slop"](#3-strategia-seo) ← **PRIORYTET**
-4. [Monetyzacja — realny plan finansowy](#4-monetyzacja)
-5. [Backlog techniczny](#5-backlog-techniczny)
-6. [KPI — co mierzymy](#6-kpi)
+0. [Do zrobienia teraz — kroki ręczne (P0)](#0-do-zrobienia-teraz)
+1. [Audyt i refaktoryzacja 2026-10-28 — co zrobiono](#1-audyt-2026-10-28)
+2. [Wdrożenie tej wersji — checklista](#2-wdrożenie)
+3. [Decyzje do podjęcia](#3-decyzje)
+4. [Strategia SEO](#4-strategia-seo)
+5. [Kierunki rozwoju produktu (kwartały)](#5-kierunki-rozwoju)
+6. [Monetyzacja](#6-monetyzacja)
+7. [Backlog techniczny (z triggerami)](#7-backlog-techniczny)
+8. [KPI i baseline](#8-kpi)
+9. [Historia (skrót wcześniejszych etapów)](#9-historia)
 
 ---
 
-## 1. Co zrobił audyt 2026-08-10
+## 0. Do zrobienia teraz
 
-Pełna lista zmian w git log; tu esencja, żeby rozumieć punkt startowy.
+Kolejność ma znaczenie. 0.1 i 0.2 wykonane 2026-10-28. Reszta to praca ręczna w panelach, ~30 minut.
 
-**Bezpieczeństwo:**
-- Next.js 16.2.3 → 16.3.0 — łata m.in. bypass middleware (a tam siedzi Basic Auth `/admin`). `npm audit`: **18 podatności → 0**.
-- Server Actions admina autoryzują się **wewnątrz akcji** (`lib/admin-auth.ts`, porównanie stałoczasowe) — wcześniej dało się je wywołać z pominięciem proxy.
-- SSRF domknięty: walidacja **każdego hopu przekierowania**, guard na `og:image` (wcześniej brak!), blokada wszystkich literałów IP (dziesiętne/hex/IPv6-mapped), limit rozmiaru odpowiedzi. Testy w `safe-fetch.test.ts`.
-
-**Poprawność:**
-- **Sitemap gubił 340 artykułów** — Supabase tnie odpowiedzi do 1000 wierszy niezależnie od `.limit()`; teraz stronicowanie `.range()`. Sitemap: 1349 URL-i.
-- `polishTypography` psuł URL-e w linkach (`2024-01-15` → `2024–01–15` = 404 na linku źródłowym) — URL-e są teraz chronione.
-- Ikony PWA/logo (`/icon-192.png`, `/icon-512.png`, `apple-icon`) — **wszystkie były 404 na produkcji**; teraz generowane w build time.
-- FTS wyszukiwarki parsował zapytania angielskim słownikiem (połykał polskie krótkie słowa) — dodany `config: "simple"`.
-- Okno duplikacji artykułów w pipeline zwężone (URL oznaczany jako przetworzony od razu po insercie), błąd dedupe twardo przerywa run, walidacja dat z RSS, retry na 429/5xx OpenRouter.
-- `/szukaj` przestał crashować przy rate-limicie; wspólny hook z abort/error handling dla strony i modala.
-
-**SEO (techniczne):**
-- **Tagi: `noindex, follow` + usunięte z sitemapy.** Katalog ma 2567 tagów, z czego 73% z JEDNYM artykułem — ~2500 stron-wydmuszek liczebnie przygniatało realną treść. To był największy techniczny „ślad AI slop".
-- Pipeline dostaje **listę istniejących tagów** i wybiera z niej (maks. 1 nowy) — koniec płodzenia wariantów „GPT-5"/„GPT 5"/„gpt-5".
-- Puste strony paginacji (`?page=9999`) → twarde 404 (wcześniej: nieskończona przestrzeń soft-404 z self-canonical).
-- `updated_at` podbijany **tylko przy zmianie treści** (migracja 005) — koniec fałszywego `dateModified`/`lastmod` przy przełączaniu flag.
-- Optymalizacja obrazów włączona dla miniatur z Supabase Storage (LCP artykułów); scrape'owane zewnętrzne bez zmian.
-- robots.txt: zdjęty `Disallow: /szukaj` (konflikt z noindex), JSON-LD naprawiony (datePublished nullable, speakable, pozycje ItemList w paginacji).
-
-**Czystość:**
-- Usunięte: `/api/cron/seed` (generował artykuły ze zmyślonych tematów — ryzyko halucynacji), 11 nieużywanych komponentów UI, martwe klasy CSS, nieużywane zależności (`date-fns`, `@supabase/ssr`), stare makiety HTML, domyślne SVG Next.js, martwe funkcje w `data.ts` i typy w `database.ts`.
-
-### 1a. Uzupełnienie: audyt SEO 2026-08-11
-
-Realizacja techniczna filarów 2–4 strategii SEO (sekcja 3). W kodzie:
-
-- **Wolumen obniżony do 6/dzień** (`vercel.json`: 2 crony × `count=3`, 05:00 i 15:00 UTC) — mniejszy odcisk scaled-content, tokeny idą w jakość.
-- **Prompt — „polski kąt"**: obowiązkowa zasada nr 10 — sekcja „## Co to oznacza dla Polski" (dostępność w PL, ceny w zł jako przeliczenie ze źródła, kontekst AI Act), z twardym zakazem zmyślania; pomijana, gdy byłaby sztuczna. Do tego dywersyfikacja struktury (wariantowe nagłówki sekcji wniosków, 2–4 sekcje, zmienny rytm) — anty-sygnał „szablonowej fabryki".
-- **Linkowanie wewnętrzne (on-site link building)**: prompt dostaje 40 ostatnich artykułów (tytuł+slug), AI wplata 1–3 kontekstowe linki `[kotwica](/artykul/slug)`; nowy `sanitizeInternalLinks` (`lib/ai/internal-links.ts`, 13 testów) wycina każdy link spoza listy — zero halucynowanych 404. Artykuły z bieżącego runu dołączają do puli (ten sam cykl newsowy). Renderer markdown: linki wewnętrzne przez `<Link>` w tej samej karcie (bez `target=_blank`/`noopener`).
-- **News sitemap** (`/news-sitemap.xml`): artykuły < 48 h w formacie Google News, zgłoszona w robots.txt — formalny sygnał świeżości pod News/Discover.
-- **IndexNow**: pipeline pinguje Bing/Seznam/Yandex po każdym runie (`lib/indexnow.ts`, fail-soft; klucz z env `INDEXNOW_KEY` serwowany pod `/indexnow.txt`).
-- **Preferred Sources**: dyskretny box na home + link w stopce z deep-linkiem `google.com/preferences/source?q=aifeed.pl`.
-- **`/o-serwisie` jako strona transparentności**: sekcje „Jak powstają nasze teksty" (proces, wierność źródłu, bramka jakości), „Skąd czerpiemy informacje" (imienna lista źródeł), „Zauważyłeś błąd?" (polityka korekt + kontakt) — rekomendacja Google i wymóg AdSense.
-- **JSON-LD**: `Organization` → `NewsMediaOrganization` z `publishingPrinciples`/`correctionsPolicy`/`actionableFeedbackPolicy` wskazującymi kotwice na `/o-serwisie`.
-- Tytuły artykułów: prompt wymusza ~70 znaków i frazę kluczową na początku.
-
-**Poza kodem — nadal do zrobienia ręcznie:** teksty autorskie (3.3), wysyłka newslettera (3.4), profile społecznościowe (LinkedIn), zgłoszenie `news-sitemap.xml` **i głównej `sitemap.xml`** w GSC. Decyzja o nazwisku podjęta 2026-08-11 (TAK, na poziomie serwisu) — `/redakcja` + Person JSON-LD wdrożone.
-
-### 1b. Pakiet jakościowy 2026-08-11 (po testach pierwszego artykułu)
-
-Testowy artykuł z nowego promptu wyszedł płytki (443 słowa) z tagami-ogólnikami — właściciel słusznie zakwestionował jakość. Odpowiedź:
-
-- **Model: `claude-sonnet-4` → `claude-sonnet-5`** (OpenRouter). Jakość pisania klasy dawnego Opusa, adaptive thinking domyślnie ON, a cena NIŻSZA ($2/$10 vs $3/$15 za MTok). `max_tokens` 4096→12000 (thinking + treść), timeout 90→120 s. Stary Sonnet 4 był deprecated od 06.2026.
-- **Prompt — głębia**: target 700–1200 słów (bogate źródło), obowiązkowe TŁO/KONKRET/ZNACZENIE w rozwinięciu, zakaz spłycania bogatych źródeł.
-- **Tagi — twarde egzekwowanie w kodzie** (route.ts): max 1 tag spoza katalogu top-60, łącznie max 5; prompt dodatkowo zakazuje tagów-ogólników ("zarząd", "odejścia"). Sam prompt nie wystarczał.
-- **Quality gate**: nowa kara -10 za <380 słów ("płytki").
-- **Wolumen: rewizja decyzji** — 2×3 → **3×3 (9/dzień, 05/11/17 UTC)**. Uzasadnienie: właściciel chce skali poważnego serwisu; 9/dzień to wciąż -25% od starego 12/dzień, a jakość per artykuł jest teraz nieporównywalnie wyższa (information gain + Sonnet 5), więc profil scaled-content maleje mimo wyższego wolumenu.
-- **Strona główna — najnowsze zawsze na górze**: hero (1) + kolumna (4) + siatka (4) = 9 najnowszych nad sekcjami kategorii (pełny dzień publikacji widoczny od wejścia); stara rotacja per-kategoria potrafiła schować świeży artykuł. Box Preferred Sources przeniesiony na dół strony.
-
-### 1c. Information gain 2.0 — synteza źródeł i bogatsze tagi (2026-08-11, wieczór)
-
-Research: **marcowy Core Update 2026 uczynił „information gain" dominującym sygnałem** (Google wprost ocenia, ile nowej informacji wnosi strona vs already-ranking content); **lutowy Discover Update 2026** premiuje nisze z ekspertyzą nad generalistów. Wnioski wdrożone:
-
-- **Multi-source synthesis**: pipeline szuka w świeżej puli doniesień o tym samym wydarzeniu z INNYCH outletów (`findRelatedItems`, próg ≥3 wspólne tokeny tytułu, testy w `parser.test.ts`) i dokleja do promptu treść maks. 2 dodatkowych źródeł. Artykuł jest syntezą — zawiera więcej niż jakikolwiek pojedynczy oryginał (czysty information gain). Zmergowane URL-e → processed po insercie (bez duplikatów); wszystkie źródła widoczne pod artykułem i w JSON-LD.
-- **Tagi — 3 stopnie zamiast zbyt wąskiej blokady**: po pierwszej wersji (tylko top-60 + 1 nowy) artykuły kończyły z JEDNYM tagiem. Teraz: katalog top-100 w promptcie → tagi istniejące w DB przechodzą (bogactwo bez nowych bytów) → całkiem nowe: max 1. Ogólniki dalej zakazane w promptcie.
-- **+4 źródła** (zweryfikowane): The Register AI, ZDNet AI, Simon Willison (praktyczne deep-dive'y LLM), MIT News AI. Razem 24 feedy. Meta AI i Mistral — feedy nie istnieją (404), odpuszczone.
-- **Model — decyzja po dyskusji**: zostaje **Sonnet 5** ($2/$10). Arena (08.2026): czołówka to Opusy/Fable (2,5–5× droższe); testy polszczyzny wskazują Gemini 3.1 Pro i Claude jako czołówkę, przy czym nasz workload (wierna adaptacja pod ścisłym promptem) premiuje instruction-following Claude'a. Rewizja za ~tydzień na realnych artykułach; opcja na przyszłość: `anthropic/claude-opus-5` ($5/$25 — przy 9 art./dzień to wciąż ~20-25 USD/mies.) dla wybranych runów, jeśli Sonnet 5 nie domknie jakości.
-
----
-
-## 2. Wdrożenie na produkcję
-
-Kolejność ma znaczenie. Całość to ~1 godzina pracy ręcznej.
-
-### 2.1. Baza danych (przed deployem kodu)
-
-- [ ] Supabase Dashboard → SQL Editor → wykonaj **`supabase/migrations/005_content_gated_updated_at.sql`** (trigger + drop zdublowanego indeksu). Smoke test w komentarzu migracji.
-- [ ] Sprawdź, czy migracje 003 (pipeline_events) i 004 (FTS) były wykonane: `SELECT * FROM pipeline_events LIMIT 1;` oraz `SELECT id FROM articles WHERE search_vector @@ to_tsquery('simple','ai:*') LIMIT 1;` — brak błędu = OK.
-
-### 2.2. Zmienne środowiskowe (Vercel → Settings → Environment Variables)
-
-- [ ] Komplet wg `.env.example`: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `OPENROUTER_API_KEY`, `CRON_SECRET`, `NEXT_PUBLIC_SITE_URL=https://www.aifeed.pl` (z `www`!), `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `NEXT_PUBLIC_GA_ID` (tylko Production).
-- [ ] `ADMIN_PASSWORD`: długie, losowe, **ASCII** (`openssl rand -base64 24`).
-- [ ] Jeśli od audytu z maja NIE zrotowałeś kluczy, które wyciekły do publicznego repo (`SUPABASE_SERVICE_ROLE_KEY`, `OPENROUTER_API_KEY`) — **zrób to teraz**. To jedyny niezamknięty punkt P0 ze starego audytu.
-
-### 2.3. Deploy i smoke testy
-
-- [ ] Merge/push na `main` → auto-deploy. Lokalnie przed pushem: `npx tsc --noEmit && npm run lint && npm test && npm run build`.
-- [ ] `curl -sI https://www.aifeed.pl/icon-512.png` → **200** (było 404).
-- [ ] `curl -s https://www.aifeed.pl/sitemap.xml | grep -c "<loc>"` → **~1349** (było 1618 z tagami, w tym tylko 1000 artykułów).
-- [ ] `curl -s https://www.aifeed.pl/news-sitemap.xml | grep -c "<news:title>"` → liczba artykułów z ostatnich 48 h (po świeżym runie > 0).
-- [ ] Po ustawieniu `INDEXNOW_KEY`: `curl -s https://www.aifeed.pl/indexnow.txt` → zwraca klucz (bez klucza: 404 = feature wyłączony, też OK).
-- [ ] `curl -sI "https://www.aifeed.pl/kategoria/biznes?page=999"` → **404**.
-- [ ] `https://www.aifeed.pl/admin` → Basic Auth działa; po zalogowaniu dashboard.
-- [ ] Ręczny cron: `curl -X POST -H "Authorization: Bearer $CRON_SECRET" "https://www.aifeed.pl/api/cron/generate?count=1"` → sukces, artykuł z tagami z istniejącego katalogu.
-- [ ] Rich Results Test (https://search.google.com/test/rich-results) dla przykładowego artykułu — NewsArticle bez błędów.
-
-### 2.4. Search Console (dzień 1 po deployu)
-
-- [ ] GSC → Sitemaps → ponownie zgłoś `sitemap.xml` (nowa zawartość: +340 artykułów, −600 tagów).
-- [ ] GSC → Usuwanie treści: nic nie rób z tagami — `noindex` wyczyści je naturalnie w ciągu tygodni.
-- [ ] Zapisz baseline: liczba zaindeksowanych stron, średnia pozycja, CTR (potrzebne do mierzenia efektu zmian).
-- [ ] Bing Webmaster Tools: import z GSC (5 minut, darmowy drugi kanał).
-
----
-
-## 3. Strategia SEO
-
-### 3.1. Diagnoza — nazwać problem po imieniu
-
-Polityka spamowa Google (aktualizacja 2026-05) definiuje **scaled content abuse** i wśród przykładów wymienia dosłownie: *„Scraping feeds (…) to generate many pages (including through automated transformations like synonymizing, **translating**, or obfuscation techniques)"*. Pipeline AiFeed — automatyczne polskie przepisania angielskich RSS-ów, 12/dzień, bez człowieka — **pasuje do litery tego przepisu**. Wytyczne dla raterów (styczeń 2025) każą dawać ocenę **Lowest** treściom „copied, paraphrased (…) auto or AI generated" bez wartości dodanej.
-
-Precedensy: w marcu 2024 Google zdeindeksował setki takich serwisów (100% trafionych miało treści AI); flagowy przypadek — BNN Breaking (AI-przepisania newsów, fikcyjne bylines, 10M wizyt/mies.) — zdechł w miesiąc. **Odzyskanie widoczności po algorytmicznej klasyfikacji praktycznie się nie zdarza** (129/130 serwisów po HCU nigdy nie wróciło). Wniosek: nie „odzyskujemy rankingu", tylko **zmieniamy profil serwisu, zanim klasyfikacja się utrwali**.
-
-Co Google toleruje, a nawet nagradza (udokumentowane cechy „ocalałych"): umiarkowane tempo publikacji z redakcją człowieka, **imienny, weryfikowalny autor**, transparentność procesu, **information gain** (coś, czego nie ma w źródle), zróżnicowana struktura tekstów.
-
-### 3.2. Filar 1 — Tożsamość redakcyjna (E-E-A-T) · *tydzień 1–2*
-
-To jest jednocześnie Twój cel wizerunkowy — serwis firmowany nazwiskiem buduje markę osobistą.
-
-- [x] ~~**Decyzja właściciela**~~ ✅ 2026-08-11: TAK, ale **na poziomie serwisu, nie artykułów** — nazwisko **Michał Zeprzałka** (zeprzalka.com) firmuje serwis i proces (`/redakcja`, `founder` w NewsMediaOrganization); autor pojedynczych artykułów pozostaje `Organization` (AiFeed), **bez bylinu** na stronach artykułów. Uzasadnienie: per-artykuł Person przy w pełni zautomatyzowanej produkcji = profil „fikcyjnych bylines" (BNN Breaking); poziom serwisu daje sygnał E-E-A-T bez tego ryzyka. Nie zmieniać bez zmiany procesu (np. realna korekta każdego tekstu).
-- [x] ~~Strona **`/redakcja`**~~ ✅ 2026-08-11: bio (Digital Solutions Architect, 12+ lat), podział ról człowiek/automatyzacja, Person JSON-LD z `sameAs` (zeprzalka.com, GitHub, Facebook). **Zostało:** zdjęcie + LinkedIn, gdy będziesz chciał je dodać.
-- [x] ~~Rozbudowa **`/o-serwisie`**~~ ✅ 2026-08-11: sekcje „Jak powstają nasze teksty", „Skąd czerpiemy informacje", polityka korekt z kontaktem; kotwice podpięte pod `publishingPrinciples`/`correctionsPolicy` w JSON-LD.
-- [ ] `siteConfig.links` + `Organization.sameAs`: realne profile (LinkedIn, X/GitHub) — załóż, jeśli nie istnieją.
-
-### 3.3. Filar 2 — Information gain: przestawienie pipeline'u · *tydzień 2–6*
-
-Zasada: **mniej, ale z wartością, której nie ma w źródle.** Konkurujesz z Google AI Overviews i z oryginałem — czysta parafraza przegrywa z oboma.
-
-- [x] ~~**Zmniejsz wolumen**~~ ✅ 2026-08-11, **zrewidowane tego samego dnia**: finalnie 3×3 = 9/dzień (05/11/17 UTC) — mniej niż stare 12/dzień, ale ze skokiem jakości per artykuł (Sonnet 5 + głębszy prompt; zob. §1b). Skala + jakość zamiast samej redukcji.
-- [x] ~~**Polski kąt w promptcie**~~ ✅ 2026-08-11: zasada nr 10 w `prompts.ts` (sekcja „Co to oznacza dla Polski" z anty-halucynacyjnymi ogranicznikami) + dywersyfikacja struktury + linkowanie wewnętrzne (1–3 linki z listy ostatnich 40 artykułów, sanitizer w `lib/ai/internal-links.ts`).
-- [ ] **1 tekst autorski tygodniowo, pisany przez człowieka** (Ty): cotygodniowe podsumowanie „Tydzień w AI po polsku" (format newsletterowy, idealny też do dystrybucji), test narzędzia po polsku (jak radzi sobie z polszczyzną — genuinely underserved temat!), albo komentarz do wydarzenia. Podpisany nazwiskiem. To jest treść, którą linkują inni.
-- [ ] **Przegląd wsteczny**: w `/admin/artykuly` masz listę — wyłącz z indeksu (unpublish) najsłabsze teksty z przeszłości (krótkie, bliskie źródłu). Mniejszy, czystszy indeks > większy, śmieciowy. (AdSense-owy case study: odrzucony serwis przeszedł review po wycięciu słabych stron.)
-
-### 3.4. Filar 3 — Kanały dystrybucji · *tydzień 2–8, potem stale*
-
-Realia 2026: AI Overviews zabrały ~40% ruchu z klasycznych wyników, ale **breaking news +103%**, a **Google Discover wysyła wydawcom tyle ruchu co wyszukiwarka**. Dla serwisu newsowego Discover > blue links.
-
-- [ ] **Discover-ready obrazy**: wymóg ≥1200 px szerokości. Dziś generator AI robi 16:9, ale scrape'owane og:image bywają mniejsze — dodaj w pipeline preferencję dużych obrazów (backlog #5.3). `max-image-preview:large` już ustawione ✅.
-- [x] ~~**Preferred Sources**~~ ✅ 2026-08-11: box na home + link w stopce (`google.com/preferences/source?q=aifeed.pl`).
-- [ ] **Google News**: nie ma już aplikowania (od 03.2025 inclusion czysto algorytmiczne) — jedyna droga to E-E-A-T + jakość, czyli filary 1–2. ✅ 2026-08-11: `/news-sitemap.xml` (artykuły < 48 h) zgłoszona w robots.txt — **dodaj ją też ręcznie w GSC**.
-- [ ] **Newsletter jako kanał własny**: masz formularz i tabelę subskrybentów — zacznij WYSYŁAĆ (cotygodniowy tekst autorski z 3.3). Wymaga: Resend/Brevo + double opt-in (backlog #5.4). Kanał odporny na algorytmy, fundament monetyzacji.
-- [ ] **Dystrybucja PL**: LinkedIn (Twój profil — wizerunek!), Wykop, ew. grupy FB o AI. 15 min dziennie.
-- [x] ~~**IndexNow/Bing**~~ ✅ 2026-08-11 (kod): ping po każdym runie pipeline'u + `/indexnow.txt`. **Zostało ręcznie:** wygeneruj klucz (`openssl rand -hex 16`), ustaw `INDEXNOW_KEY` w Vercel → Production, zweryfikuj `curl https://www.aifeed.pl/indexnow.txt`.
-
-### 3.5. Filar 4 — Higiena techniczna · *zrobione + monitoring*
-
-Zrobione w audycie (tagi noindex, sitemap, daty, soft-404, LCP, słownik tagów). Pozostaje monitoring:
-
-- [ ] Co tydzień GSC: indeksacja (spadek liczby zaindeksowanych tagów = plan działa), krzywa pozycji/CTR, błędy crawl.
-- [ ] Po 4 tygodniach: PageSpeed Insights baseline → LCP artykułu mobile < 2,5 s (miniatury Supabase są już optymalizowane; jeśli scrape'owane obrazy ciążą — backlog #5.3: re-host wszystkich miniatur do Storage).
-- [ ] Konsolidacja katalogu tagów (backlog #5.2) — po niej można rozważyć przywrócenie indeksacji dla ~50 najmocniejszych tagów z realną treścią. Nie wcześniej.
-
-### 3.6. Sekwencja — co robić w jakiej kolejności
-
-| Tydzień | Działanie |
-|---|---|
-| 1 | Wdrożenie (sekcja 2) + baseline GSC + decyzja o nazwisku |
-| 1–2 | `/redakcja` + rozbudowa `/o-serwisie` + profile społecznościowe |
-| 2–3 | Zmiana promptu (polski kąt) + redukcja wolumenu do 6/dzień |
-| 3–4 | Pierwszy tekst autorski + start wysyłki newslettera + box Preferred Sources |
-| 4–6 | Przegląd i unpublish najsłabszych starych tekstów; IndexNow |
-| 6–8 | Ocena pierwszych sygnałów GSC; korekta kursu |
-| stale | 1 tekst autorski/tydz., dystrybucja, monitoring tygodniowy |
-
----
-
-## 4. Monetyzacja
-
-### 4.1. Zimny prysznic — liczby dla polskiego rynku
-
-Display w Polsce płaci **1–5 zł RPM** (AdSense, polski język). Zoptymalizowane sieci (Ezoic/Journey) realnie 5–12 zł RPM. Czyli:
-
-| Ruch/mies. | AdSense | Sieć zoptymalizowana |
+| # | Co | Dlaczego to P0 |
 |---|---|---|
-| 10 000 PV | 10–50 zł | 50–120 zł |
-| 50 000 PV | 50–250 zł | 250–600 zł |
-| 100 000 PV | 100–500 zł | 500–1200 zł |
-
-**Sam display nie spłaci nawet rachunku za OpenRouter.** Realny stack przychodów dla niszowego serwisu PL to: **afiliacja (USD/EUR) + artykuły sponsorowane + newsletter**, z displayem jako dodatkiem. Do tego korzyść wizerunkowa — która przy Twoim profilu (dev z marką osobistą) może być warta więcej niż wszystkie powyższe (zlecenia, konsultacje, wystąpienia).
-
-### 4.2. Faza 0 — fundament (teraz, przychód: 0 zł)
-
-- **NIE aplikuj jeszcze do AdSense.** Automatyczny serwis z tempem 12/dzień bez stron redakcyjnych to podręcznikowy profil odrzutu „low value content" — a odrzut zostaje w historii konta. Najpierw filary 1–2 SEO (tożsamość + strony transparentności — to są jednocześnie wymogi AdSense).
-- Załóż konta: PartnerStack (afiliacje AI SaaS), WhitePress i Linkhouse (marketplace artykułów sponsorowanych — samo wystawienie serwisu jest darmowe).
-
-### 4.3. Faza 1 — pierwsze przychody (1000+ sesji/mies.; horyzont: 1–3 mies.)
-
-- [ ] **Journey by Mediavine** — próg obniżony do **1000 sesji/mies.** (od 01.2026), przyjmują serwisy międzynarodowe, rev-share 70%. Najlepszy pierwszy network dla PL (alternatywa: Ezoic bez progu). AdSense dopiero, gdyby Journey odrzucił.
-- [ ] **Afiliacja AI SaaS** — wymaga treści recenzyjnych (→ synergiczne z filarem 2 SEO: testy narzędzi po polsku). Programy z realnymi stawkami (2026): ElevenLabs 22% recurring (12 mies.), Jasper 25–30% recurring, Writesonic 30% lifetime, Synthesia 25%, Murf 20% (do 24 mies.). Płacone w USD — omija słaby polski RPM. Zacznij od 2–3 recenzji/rankingu miesięcznie („Najlepsze AI do generowania głosu po polsku" itp.) z oznaczonymi linkami afiliacyjnymi.
-- [ ] **Newsletter**: buduj listę (cel fazy: 500–1000 subskrybentów). Jeszcze nie monetyzuj.
-
-### 4.4. Faza 2 — skalowanie (10 000+ PV/mies.; horyzont: 3–9 mies.)
-
-- [ ] **Artykuły sponsorowane** przez WhitePress/Linkhouse: przy widocznym DR/ruchu niszowy serwis netto dostaje ~100–500 zł/publikację. Limit: 2–4/mies., zawsze oznaczone (`rel="sponsored"`) — nadmiar sam w sobie jest spam-sygnałem.
-- [ ] **Sponsoring newslettera**: przy 1–2 tys. zaangażowanych subskrybentów w niszy AI — 300–800 zł/wydanie od narzędzi AI celujących w PL. (Precedens rynkowy: płatne newslettery tech w PL — 19–49 zł/mies.; unknowNews/Pucek jako wzorce formatu.)
-- [ ] **Direct affiliate deals**: po zbudowaniu pozycji — indywidualne stawki z narzędziami zamiast marketplace'owych.
-
-### 4.5. Faza 3 — dźwignia wizerunkowa (6–12 mies.)
-
-- Płatny newsletter premium (konwersja free→paid w PL: 2–7%; 1000 subów × 5% × 299 zł/rok ≈ 15 000 zł/rok) — dopiero przy realnie unikalnej treści autorskiej.
-- Produkty własne: kurs/e-book „AI w praktyce po polsku", konsultacje. Marża 100%, sprzedaż przez listę.
-- Marka osobista: wystąpienia, podcasty, zlecenia B2B — „prowadzę największy polski serwis o AI" to zdanie otwierające drzwi. Wymaga nazwiska na serwisie (filar 1).
-
-### 4.6. Czego NIE robić
-
-- ❌ AdSense przed zbudowaniem stron E-E-A-T (ryzyko odrzutu, który zostaje w historii).
-- ❌ Masowa sprzedaż linków — Google site reputation abuse (manual actions od 2024).
-- ❌ Ściana reklam przy małym ruchu — zabija Discover-owe CTR-y i CWV za grosze.
+| 0.1 | ✅ ~~**Wdróż tę wersję** (§2)~~ — wdrożone 2026-10-28 | Sitemapa na produkcji jest zamrożona od 12.08 — **541 artykułów nie ma w sitemapie**; Next 16.3.0 ma krytyczne CVE (m.in. RCE w `next/og`, którego używamy do ikon i kart OG) |
+| 0.2 | ✅ ~~**Migracje bazy**~~ — 001 → 007 wgrane 2026-10-28 po pełnym backupie i teście na odtworzonej kopii; `verify.sql` = wszystko `true`, dane nietknięte (`supabase/README.md`) | Brak FTS (004 — wyszukiwarka szuka dziś tylko dokładnej frazy w tytułach) i RPC `popular_tags` (001 — „Trendy" i katalog tagów liczone wolnym obejściem). Migracje są idempotentne, addytywne i bezpieczne dla danych |
+| 0.2a | **MailerLite** (newsletter) — kod, token i ID grupy są już na produkcji. Zostało w panelu MailerLite: **„Double opt-in for API and integrations" → ON**, nadawca + uwierzytelnienie domeny `aifeed.pl` (DKIM/SPF + DMARC), opcjonalnie wygląd e-maila potwierdzającego (plan płatny) → `emails/README.md` | Formularz w stopce do 28.10 zwracał błąd (brak tabeli w bazie); teraz zapisuje do grupy „AiFeed — newsletter". Bez włączonego double opt-in adresy są aktywowane bez potwierdzenia |
+| 0.3 | **Vercel → Settings → Domains → `aifeed.pl`**: przekierowanie na `www.aifeed.pl` ustaw jako **308 (permanent)** | Dziś apex odpowiada **307 (tymczasowe)** — Google nie konsoliduje sygnałów z linków do `aifeed.pl` tak pewnie jak przy stałym |
+| 0.4 | **Google Search Console**: Sitemapy → ponownie prześlij `sitemap.xml` (teraz ~1910 URL-i) i `news-sitemap.xml`; Indeksowanie stron → sprawdź „Soft 404" (powinny zniknąć — nieistniejące artykuły zwracają już prawdziwe 404) | Szybsze wciągnięcie 541 brakujących artykułów |
+| 0.5 | **[DECYZJA] Zgody na cookies (D1)** — przeczytaj §3 | GA4 działa dziś bez zgody użytkownika; to ryzyko prawne (PKE) i twardy wymóg przed jakąkolwiek reklamą |
+| 0.6 | Rotacja kluczy `SUPABASE_SERVICE_ROLE_KEY` i `OPENROUTER_API_KEY`, **jeśli** nie zrobiłeś tego po wycieku z maja. Dodatkowo **token MailerLite** (był wklejony w rozmowie z asystentem): MailerLite → Integrations → API → nowy token → Vercel `MAILERLITE_API_TOKEN` → redeploy → usuń stary | Jedyny niezamknięty punkt P0 ze starego audytu |
 
 ---
 
-## 5. Backlog techniczny
+## 1. Audyt 2026-10-28
+
+Pełny przegląd kodu, produkcji (HTTP, HTML, sitemapy), bazy (tylko odczyt) i telemetrii pipeline'u z ostatnich 2 tygodni. Poniżej problemy **znalezione na produkcji** i to, co z nimi zrobiono.
+
+### 1.1. Krytyczne (SEO i bezpieczeństwo)
+
+- **Sitemapa zamrożona na dzień buildu.** `sitemap.ts` był w tej wersji Next cache'owanym route handlerem generowanym raz, przy deployu 12.08 — 1371 URL-i zamiast ~1910. → `revalidate = 3600`, limit podniesiony do 49 tys. URL-i, uczciwe `lastmod` stron statycznych (stała data zamiast `new Date()`), usunięte ignorowane przez Google `changefreq`/`priority`.
+- **Next 16.3.0 → 16.4.3** — seria krytycznych CVE (RCE w `next/og` ImageResponse, RCE/SSRF w optymalizatorze obrazów, cache poisoning ISR). Do tego `npm audit fix` (sharp, source-map-js). Produkcyjnie: **0 podatności**.
+- **`/_next/image` było otwartym proxy** dla dowolnego obrazu z internetu (catch-all `**` w `remotePatterns`) — zużywało limit transformacji i wystawiało powierzchnię ataku z CVE. → whitelist tylko naszego Supabase Storage; obce miniatury i tak renderują się jako `unoptimized`.
+- **Soft-404:** nieistniejący artykuł zwracał **HTTP 200** (+noindex) — `loading.tsx` wysyłał nagłówki przed `notFound()`. → usunięty `loading.tsx` artykułu (nawigacja dalej natychmiastowa — strony ISR są prefetchowane w całości); nieznana kategoria → 404 z `layout.tsx`.
+- **Nagłówki bezpieczeństwa przeniesione z proxy do `next.config.ts`.** Proxy (runtime Node.js) uruchamiał funkcję przed cache przy **każdej odsłonie** — pomiar: +50–130 ms TTFB i jedno wywołanie funkcji na wejście. Teraz proxy działa tylko na `/admin`.
+
+### 1.2. Wydajność
+
+- **Region funkcji `iad1` (Waszyngton) → `cdg1` (Paryż)**, obok bazy Supabase (eu-west-3). Każde zapytanie przy renderze przechodziło wcześniej przez Atlantyk; strony kategorii robią 3–4 zapytania sekwencyjnie.
+- **Listy bez treści artykułów.** Home pobierał ~45 pełnych artykułów (`select *`, ~7 KB markdownu każdy), „Podobne" — 50 pełnych artykułów na render, a **`/api/search` wysyłał do przeglądarki ~140 KB JSON-a na zapytanie → teraz 12,8 KB**.
+- **Spis treści jako komponent serwerowy** — cały markdown artykułu nie jest już dublowany w payloadzie RSC (HTML artykułu −13%).
+- Tagi artykułu w jednym zapytaniu zamiast dwóch; layout nie pyta bazy o kategorie (siteConfig); usunięty bezużyteczny preconnect do Supabase; `x-powered-by` wyłączony; dłuższy cache zoptymalizowanych miniatur.
+
+### 1.3. Pipeline (dane z telemetrii)
+
+- **Koszty AI zapisywały się jako $0** (119/119 zdarzeń) — kod czytał `usage.total_cost`, a OpenRouter zwraca `usage.cost`. Dashboard `/admin` od teraz pokaże realne koszty.
+- **231 URL-i miniatur z `&amp;`** (zepsute parametry CDN) i **125 atrybucji typu `Spider&#x27;s Web`** → pipeline dekoduje encje, historyczne rekordy normalizowane przy odczycie (bez zapisu do bazy); brak zdjęcia pokazuje markowy placeholder. Logo arXiv (211 artykułów) i grafiki stockowe **zostają** jako miniatury — decyzja właściciela (D3).
+- **Kategoria spoza katalogu** („edukacja", 26.10) → artykuł bez kategorii (poza listami i breadcrumbem). → normalizacja z fallbackiem na kategorię feedu.
+- **Data w prompcie zamrożona** w chwili załadowania modułu (Fluid Compute reużywa instancji między dniami) → budowana per wywołanie. Usunięte sprzeczności prompt systemowy vs użytkownika (liczba sekcji, nagłówek wniosków).
+- **Bramka jakości przepuszczała angielski tytuł** w idealnym artykule (100−50 = 50, a próg odrzuca `< 50`) — wykryte nowym testem; kara podniesiona. Detektor odmowy AI sprawdza tylko początek odpowiedzi (cytat „nie mogę tego komentować" nie odrzuca już dobrego tekstu). Detektor angielszczyzny nie myli polskich „to/on/was/but".
+- **Tagi:** upsert nadpisywał kanoniczną nazwę istniejącego tagu wariantem z AI („OpenAI" → „openai"). → dopasowanie po slugu, istniejące linkowane po id, powiązania jednym batchem.
+- **Jeden fetch strony źródłowej** (treść + og:image) zamiast dwóch; większy budżet źródła (12 tys. znaków zamiast 6 — przy targecie 700–1200 słów stary limit ucinał bogate materiały); retry obejmuje zerwany strumień odpowiedzi (`TypeError: terminated` z telemetrii); `scrape_skip` loguje przyczynę.
+- **Źródła RSS:** usunięte martwe (Microsoft AI Blog — 410, „Anthropic Research" — 404), zaktualizowane przeniesione (OpenAI, Google), encje w tytułach RSS dekodowane.
+
+### 1.4. SEO on-page, UX, jakość kodu
+
+- Graf encji JSON-LD z `@id`: NewsArticle (autor i wydawca) → NewsMediaOrganization → `founder` → Person na `/redakcja` (teraz `ProfilePage`); WebSite z `@id`. Wymiary OG deklarowane tylko dla własnej karty.
+- **„Podobne publikacje" tematyczne** (wspólne tagi) zamiast losowych — spójne klastry linkowania wewnętrznego, deterministyczne między regeneracjami.
+- Daty w strefie **Europe/Warsaw** (serwer w UTC pokazywał artykuł z 0:30 z datą dnia poprzedniego).
+- Pasek kategorii w tej samej kolejności co menu mobilne, stopka i sekcje home (jedno źródło: `siteConfig`).
+- Polityka prywatności zgodna ze stanem faktycznym (GA4, Vercel Analytics, localStorage, MailerLite jako podmiot przetwarzający).
+- **Newsletter na MailerLite** z double opt-in (honeypot, bez kopii adresów w Supabase, identyczna odpowiedź dla nowych i istniejących adresów) + zaprojektowana wiadomość potwierdzająca (`emails/`).
+- Admin: odświeżanie strony artykułu/sitemap po zdjęciu tekstu, walidacja argumentów akcji. Cron: porównanie sekretu stałoczasowe. Newsletter: wspólny klient, poprawne kody błędów.
+- Testy 84 → **130** (nowe: bramka jakości, tagi, ekstrakcja treści/og:image, encje, miniatury, daty, kategorie). CI na GitHub Actions. `npm run check`.
+- **Niezależny code review** (osobny agent, bez dostępu do moich założeń) potwierdził niezmienniki i znalazł m.in.: zbyt agresywny detektor angielskich tytułów (odrzucałby „Gemini in Chrome trafia do Polski i UE"), cache'owanie błędów bazy jako pustej sitemapy/404, ryzyko przekroczenia limitu funkcji przy retry — wszystkie poprawione (błędy bazy w ścieżkach ISR rzucają wyjątek → Next zachowuje poprzednią wersję; wywołania AI mają twardy termin).
+- Migracje **006** (indeks pod listy kategorii, `popular_tags` tylko z opublikowanych) i **007** (stały `search_path` funkcji). `supabase/verify.sql` — diagnostyka schematu.
+- **Baza zmigrowana na produkcji** (001 → 007, jedna transakcja):
+  1. pełny backup przez Supabase CLI w `../aifeed-backups/2026-10-28/`, odtworzony testowo w kontenerze z identycznym Postgresem;
+  2. migracje sprawdzone na tej kopii, potem próba na produkcji z `ROLLBACK`;
+  3. właściwe wgranie.
+
+  Wynik:
+  - liczby wierszy i suma kontrolna `updated_at` identyczne jak przed migracją (lastmod w sitemapie nietknięty);
+  - ostrzeżenia Security Advisor: 1 → 0;
+  - `pg_trgm` w schemacie `extensions`;
+  - nieużywana tabela `newsletter_subscribers` nigdy nie powstała.
+
+---
+
+## 2. Wdrożenie
+
+### 2.1. Kolejność
+
+1. **Baza najpierw** (kod działa też bez migracji — ma fallbacki; newsletter od nich nie zależy):
+   - [x] `supabase/verify.sql` → braki: 001, indeks z 002, 004, 006.
+   - [x] Backup + migracje 001 → 007 (procedura: `supabase/README.md` › Kopie zapasowe).
+   - [x] `verify.sql` jeszcze raz → wszystkie `true` (2026-10-28).
+2. **Deploy:**
+   ```bash
+   npm run check && npm run build
+   git push
+   npx vercel deploy --prod --yes
+   ```
+3. **Smoke testy** (wszystkie powinny przejść):
+   - [ ] `curl -s https://www.aifeed.pl/sitemap.xml | grep -c "<loc>"` → **~1910+** (było 1371)
+   - [ ] `curl -sI https://www.aifeed.pl/artykul/nie-istnieje | head -1` → **404** (było 200)
+   - [ ] `curl -sI https://www.aifeed.pl/kategoria/xyz | head -1` → **404**
+   - [ ] `curl -sI https://www.aifeed.pl/ | grep -i "x-vercel-id\|content-security"` → CSP obecne; `x-vercel-id` bez `iad1` (strona z CDN bez funkcji)
+   - [ ] `curl -s -o /dev/null -w "%{http_code}" "https://www.aifeed.pl/_next/image?url=https%3A%2F%2Fupload.wikimedia.org%2Fwikipedia%2Fcommons%2F4%2F47%2FPNG_transparency_demonstration_1.png&w=64&q=75"` → **400** (było 200)
+   - [ ] `https://www.aifeed.pl/admin` → Basic Auth działa
+   - [ ] Formularz newslettera w stopce → „Prawie gotowe! Sprawdź skrzynkę" → mail potwierdzający z MailerLite → klik → adres aktywny w grupie (po kroku 0.2a)
+   - [ ] Wyszukiwarka zwraca wyniki (004 wgrana — FTS)
+   - [ ] Po najbliższym cronie: `/admin` → koszt runu > $0; nowy artykuł ma kategorię, tagi, miniaturę
+   - [ ] Rich Results Test dla przykładowego artykułu — NewsArticle bez błędów
+4. **Domena i GSC** — punkty 0.3 i 0.4.
+
+### 2.2. Gdyby coś poszło nie tak
+
+- Rollback kodu: Vercel → Deployments → poprzedni deployment → „Promote to Production" (natychmiastowy).
+- Migracje są addytywne (nowe tabele/kolumny/indeksy/funkcje) — rollback kodu nie wymaga cofania bazy.
+
+---
+
+## 3. Decyzje
+
+Każda decyzja ma rekomendację. Zaznacz wybór, a ja (lub kolejna sesja) to wdrożę.
+
+### D1. Zgody na cookies (CMP) — **P0 przed jakąkolwiek monetyzacją**
+
+Stan: GA4 ustawia cookies `_ga` bez zgody. Od 11.2024 polskie Prawo komunikacji elektronicznej (art. 399) wymaga **uprzedniej zgody** na cookies niebędące niezbędnymi; AdSense/Journey/Ezoic w EOG wymagają certyfikowanego CMP (TCF 2.2) i Consent Mode v2.
+
+- **A (rekomendowane):** lekki baner zgód + **Google Consent Mode v2** (domyślnie `denied`, GA4 wysyła modelowane pingi bez cookies do czasu zgody). Teraz własny, minimalistyczny baner zgodny z designem; przy starcie reklam podmiana na certyfikowany CMP (np. darmowy „Privacy & messaging" Google). Koszt: ~1 sesja pracy. Efekt: zgodność + dane GA nadal użyteczne.
+- B: wyłączyć GA4, zostawić tylko Vercel Web Analytics (bez cookies → bez banera). Najprostsze, ale tracisz GA4 (konwersje, źródła ruchu, przyszłe połączenie z AdSense).
+- C: zostawić jak jest — **nie rekomenduję** (ryzyko prawne rośnie z ruchem; blokuje monetyzację).
+
+### D2. Newsletter — częstotliwość i treść
+
+✅ **Wybrane narzędzie: MailerLite** (2026-10-28, grupa „AiFeed — newsletter") — zapis z double opt-in z formularza w stopce, MailerLite przechowuje listę, wysyła potwierdzenia i obsługuje wypisy; copy w stopce bez obietnicy „codziennie". Konfiguracja panelu: `emails/README.md` (krok 0.2a).
+
+Do decyzji: **co i jak często wysyłamy.**
+- **A (rekomendowane):** **tygodniowo** — „Tydzień w AI po polsku": automatyczny draft z 5–7 najważniejszych artykułów tygodnia + Twój krótki komentarz (E-E-A-T, §5.2). Technicznie: endpoint tworzący w MailerLite szkic kampanii (API `campaigns`) do Twojej akceptacji — nie automatyczna wysyłka.
+- B: codzienny digest automatyczny (kampania RSS w MailerLite z `feed.xml`) — zero pracy, ale niska wartość i ryzyko wypisów; nie rekomenduję na start.
+- Dodatkowo: mail powitalny po potwierdzeniu (automatyzacja MailerLite z wyzwalaczem „dołączył do grupy") — mogę zaprojektować w stylu wiadomości potwierdzającej.
+
+### D3. Miniatury: logo i grafiki stockowe ze źródeł
+
+✅ **Decyzja właściciela (2026-10-28): zostają.** Pipeline bierze og:image ze źródła także wtedy, gdy to logo serwisu (arXiv — dziś 211 artykułów) albo stockowa grafika używana przez źródło wielokrotnie. AI generuje miniaturę tylko, gdy źródło nie ma żadnego obrazka (~5% artykułów).
+
+Opcja na przyszłość (gdy Discover stanie się priorytetem): zastępować **wyłącznie logo arXiv** miniaturą AI. Koszt: ~1,2 artykułu z arXiv dziennie × ~$0,04 (Gemini 2.5 Flash Image) ≈ **$1,5/mies.**; jednorazowo dla 211 istniejących ≈ $8–9. Zmiana to kilka linijek w `generator.ts`. Realny koszt obrazka zobaczysz w `/admin` po pierwszym tygodniu (logowanie kosztów naprawione).
+
+### D4. Przegląd wsteczny najsłabszych tekstów
+
+Od kwietnia do sierpnia pipeline działał na słabszym modelu i promptach (krótsze teksty, angielskie slugi, 1 artykuł bez kategorii od 04.2026). Mniejszy, czystszy indeks > większy, śmieciowy.
+- **A (rekomendowane):** raport w `/admin` „kandydaci do zdjęcia" (< 400 słów, brak sekcji wniosków, angielski slug, brak kategorii, 0 wyświetleń w GSC po 90 dniach) → ręczna decyzja per artykuł → unpublish (404, nie 410 — można przywrócić). Wymaga: integracja GSC API (opcjonalnie) albo eksport CSV z GSC.
+- B: zostawić — mniejsze ryzyko, ale „ogon" słabych stron obniża ocenę całej domeny w modelu helpful content.
+
+### D5. Model i wolumen
+
+Stan (14 dni): 117 artykułów, średnio 801 słów, quality score śr. 99,9 (bramka praktycznie nie różnicuje — §5.1), synteza wielu źródeł tylko w 3% artykułów, 0 przerwanych runów (śr. 132 s, maks. 186 s z 270 s budżetu).
+- **A (rekomendowane):** zostać przy Sonnet 5 i 9/dzień; po tygodniu z poprawnym logowaniem kosztów (od tej wersji) policzyć realny koszt/artykuł; nadwyżkę budżetu przeznaczyć na **weryfikację faktów** (§5.1), nie na droższy model.
+- B: Opus 5 dla artykułów z syntezą ≥2 źródeł (najbardziej wymagające) — ~2,5× koszt tych tekstów.
+- C: zwiększenie wolumenu — **nie teraz** (profil scaled content; najpierw sygnały jakości z GSC).
+
+### D6. Źródła RSS
+
+VentureBeat blokuje nasz bot (HTTP 429), AI News ma przerwy (502/timeout), ZDNet przekierowuje temat AI na ogólny feed newsów (filtr słów kluczowych go odsiewa). Polskich źródeł są 3 (Spider's Web, AntyWeb, Niebezpiecznik), a **Spider's Web regularnie nie daje się pobrać z serwerów Vercela** (lokalnie działa — od tej wersji telemetria pokaże kod błędu; przeniesienie funkcji do Paryża może to samo naprawić).
+- **A (rekomendowane):** po tygodniu przejrzeć `scrape_skip.reason` w telemetrii; dodać 2–3 polskie źródła o AI (np. sekcje AI portali technologicznych, blogi polskich firm/uczelni AI) i 1–2 źródła regulacyjne UE (AI Act) — polski kąt to nasza przewaga (§4).
+
+### D7. Vercel Pro
+
+✅ **Stan (sprawdzony 2026-10-28):** projekt `aifeed-pl` jest w zespole **zeprzalka** na planie **Pro**. Ograniczenie Hobby („bez użycia komercyjnego") już nie dotyczy, są dłuższe logi i wyższe limity.
+
+Do decyzji zostaje tylko **integracja z Git** — dziś jej nie ma (`git push` nie wdraża, deploy = `npx vercel deploy --prod --yes`).
+- **A (rekomendowane przy kolejnych większych zmianach):** podłączyć repozytorium GitHub. Każdy push na `main` = deploy produkcyjny, każda gałąź = podgląd (preview) do sprawdzenia przed wdrożeniem. Wymaga zielonego CI jako bramki.
+- B: zostać przy ręcznym deployu — pełna kontrola, ale łatwo zapomnieć o wdrożeniu (tak sitemapa „zamarzła" na 2,5 miesiąca).
+
+### D8. Kopie zapasowe bazy
+
+✅ **Stan (sprawdzony 2026-10-28):**
+- Organizacja Supabase jest na planie **Pro** — dzienne kopie fizyczne, 7 dni wstecz (Dashboard → Database → Backups).
+- Ręczny pełny dump sprzed migracji leży w `../aifeed-backups/2026-10-28/` i został odtworzony testowo. Procedura: `supabase/README.md`.
+
+Do decyzji tylko **długi horyzont**: 7 dni nie chroni przed błędem zauważonym po tygodniu (np. masowe zepsucie treści). 1900+ artykułów to główny kapitał serwisu.
+- **A (rekomendowane):** cotygodniowy dump (GitHub Action → prywatny storage, 12 tygodni retencji). Koszt ~0 zł.
+- B: PITR (płatny dodatek Supabase) — odtworzenie do sekundy, ale drożej i wciąż w tym samym dostawcy.
+- C: ręczny dump przed każdą większą zmianą (minimum — już stosowane).
+
+---
+
+## 4. Strategia SEO
+
+### 4.1. Diagnoza (bez zmian od 08.2026)
+
+Polityka spamowa Google definiuje **scaled content abuse** i wprost wymienia automatyczne tłumaczenie feedów. Ocalałe serwisy AI-assisted mają wspólne cechy: umiarkowane tempo, transparentność procesu, **information gain** (coś, czego nie ma w źródle), imienna odpowiedzialność za serwis, zróżnicowana struktura. Odzyskanie widoczności po klasyfikacji algorytmicznej praktycznie się nie zdarza — dlatego profil serwisu zmieniamy **zanim** klasyfikacja się utrwali.
+
+### 4.2. Stan filarów
+
+| Filar | Stan | Następny krok |
+|---|---|---|
+| 1. Tożsamość (E-E-A-T) | ✅ `/redakcja` (ProfilePage), `/o-serwisie` (proces, korekty), graf encji z `@id` | Profile społecznościowe serwisu (LinkedIn/X) → `sameAs` organizacji; zdjęcie na `/redakcja` |
+| 2. Information gain | 🟡 polski kąt w prompcie, synteza źródeł (ale tylko 3% artykułów), linkowanie wewnętrzne | Klasteryzacja tematów (§5.1), huby tematyczne (§5.2), tekst autorski tygodniowo |
+| 3. Dystrybucja | 🟡 news-sitemap, IndexNow, Preferred Sources | Newsletter (D2), Discover-ready obrazy (§5.3), social auto-posting |
+| 4. Higiena techniczna | ✅ po tej wersji: sitemapa ISR, prawdziwe 404, region, payloady, nagłówki | Monitoring GSC co tydzień; Core Web Vitals po 28 dniach od deployu |
+
+### 4.3. Tagi
+
+Katalog: 2618 tagów, ~73% z jednym artykułem → strony tagów pozostają `noindex, follow` i poza sitemapą. Docelowo zastąpią je **huby tematyczne** (§5.2) — indeksowalne strony dla ~30–50 najważniejszych encji. Nie przywracać indeksacji tagów bez konsolidacji katalogu (backlog 7.1).
+
+### 4.4. Czego nie robić
+
+- ❌ Zwiększać wolumenu, zanim GSC pokaże stabilną indeksację i CTR nowych artykułów.
+- ❌ Bylinów osób przy artykułach (decyzja właściciela — nazwisko firmuje serwis, nie teksty).
+- ❌ Blokować crawlerów AI w robots.txt — dla serwisu o AI cytowania w ChatGPT/Perplexity/AI Overviews to kanał dystrybucji.
+- ❌ Masowej sprzedaży linków / nadmiaru artykułów sponsorowanych (site reputation abuse).
+
+---
+
+## 5. Kierunki rozwoju
+
+Cel: **najlepszy polski autonomiczny serwis o AI** = najbardziej wiarygodny (fakty), najbardziej użyteczny dla polskiego czytelnika (kontekst PL/UE), najlepiej zorganizowany (tematy, nie tylko strumień newsów).
+
+### 5.1. Q4 2026 — jakość treści 2.0 (po wdrożeniu §0)
+
+- **Weryfikacja faktów (LLM-as-judge):** drugi, tańszy przebieg modelu porównuje gotowy artykuł ze źródłem i zwraca listę twierdzeń bez pokrycia (liczby, daty, cytaty). Twierdzenie bez pokrycia → poprawka albo odrzut. Dziś bramka jakości ocenia tylko strukturę (śr. 99,9/100 — nie różnicuje). To największa dźwignia zaufania przy zerowym udziale człowieka. Koszt: ~$0,005–0,01/artykuł.
+- **Klasteryzacja tematów (embeddingi):** zamiast porównania tokenów tytułów (synteza w 3% artykułów) — podobieństwo semantyczne całej puli feedów → więcej syntez z 2–3 źródeł i deduplikacja na poziomie wydarzenia (dziś ~1% par artykułów o tym samym temacie).
+- **Raport jakości w `/admin`:** rozkład długości, odsetek syntez, odrzuty i ich przyczyny, koszty dzienne (dane już są w `pipeline_events`).
+
+### 5.2. Q1 2027 — struktura i treści wiecznie zielone
+
+- **Huby tematyczne** `/temat/[encja]` (OpenAI, Anthropic, Google, Meta, AI Act, modele open source…): krótkie, regularnie aktualizowane wprowadzenie (AI + Twoja redakcja), oś czasu wydarzeń, FAQ, wszystkie artykuły o encji. Indeksowalne — zastępują cienkie tagi jako cel linkowania wewnętrznego. Największa dźwignia topical authority.
+- **„Tydzień w AI po polsku"** — automatyczny draft z artykułów tygodnia + Twój komentarz, podpisany nazwiskiem; jednocześnie wydanie newslettera (D2) i strona archiwum.
+- **Słownik AI** (`/slownik/[termin]`) — evergreen, duży wolumen zapytań informacyjnych po polsku, naturalne linkowanie z artykułów.
+- **Poradniki i porównania** („Najlepsze narzędzia AI do X po polsku") — fundament afiliacji (§6), pisane/redagowane przez Ciebie.
+
+### 5.3. Q1–Q2 2027 — dystrybucja i Discover
+
+- Miniatury ≥ 1200 px i re-host wszystkich miniatur do Storage (kontrola nad LCP i dostępnością; wymóg Discover) — backlog 7.3, D3.
+- Auto-posting nowych artykułów na LinkedIn/X/Threads/Bluesky z pipeline'u (krótki lead + link; bez spamu — max kilka dziennie).
+- Integracja GSC API z `/admin`: wyświetlenia/kliknięcia per artykuł i per źródło RSS → wagi w selekcji tematów (pętla zwrotna: piszemy więcej o tym, co Polacy realnie czytają).
+
+### 5.4. Q2 2027+ — skala
+
+- Vercel Queues dla pipeline'u (artykuł = osobne zadanie z własnym budżetem i retry) — gdy wolumen > 10/dzień albo pojawią się przerwane runy.
+- Wyszukiwarka semantyczna (pgvector) — gdy archiwum przekroczy ~5 tys. artykułów.
+- Personalizacja (ulubione tematy) — dopiero przy kontach użytkowników (newsletter premium).
+
+---
+
+## 6. Monetyzacja
+
+### 6.1. Realia rynku PL (bez zmian)
+
+Display w Polsce: **1–5 zł RPM** (AdSense), sieci zoptymalizowane 5–12 zł. Sam display nie pokryje kosztów. Realny stos: **afiliacja (USD/EUR) + artykuły sponsorowane + newsletter**, display jako dodatek; do tego dźwignia wizerunkowa (marka osobista, zlecenia B2B).
+
+### 6.2. Warunki wstępne (twarde)
+
+1. CMP + Consent Mode v2 (D1).
+2. Vercel Pro (D7 — Hobby wyklucza użycie komercyjne).
+3. Strony transparentności ✅, polityka prywatności z sekcją o reklamach (dopisać przy starcie reklam).
+4. Przegląd wsteczny słabych tekstów (D4) — przed aplikacją do sieci reklamowej.
+
+### 6.3. Fazy
+
+| Faza | Próg | Działania |
+|---|---|---|
+| 0 — fundament | teraz | §0, D1, D2; konta: PartnerStack (afiliacje AI SaaS), WhitePress/Linkhouse (marketplace sponsorowanych — samo wystawienie darmowe) |
+| 1 — pierwsze przychody | 1000+ sesji/mies. | **Journey by Mediavine** (próg 1000 sesji, rev-share 70%; alternatywa Ezoic); 2–3 poradniki/rankingi miesięcznie z oznaczoną afiliacją (ElevenLabs 22% recurring, Jasper 25–30%, Writesonic 30% lifetime, Synthesia 25%); newsletter: budowa listy (cel 500–1000) |
+| 2 — skalowanie | 10 000+ PV/mies. | Artykuły sponsorowane 2–4/mies. (`rel="sponsored"`, oznaczone; 100–500 zł/szt.); sponsoring newslettera (300–800 zł/wydanie przy 1–2 tys. subskrybentów); bezpośrednie umowy afiliacyjne |
+| 3 — dźwignia | 6–12 mies. | Newsletter premium (konwersja free→paid 2–7%), produkty własne (kurs/e-book „AI w praktyce po polsku"), konsultacje, wystąpienia |
+
+### 6.4. Czego nie robić
+
+- ❌ AdSense/Journey przed D1 i D4 (odrzut zostaje w historii konta).
+- ❌ Ściana reklam przy małym ruchu (CWV i Discover CTR za grosze).
+- ❌ Masowa sprzedaż linków.
+
+---
+
+## 7. Backlog techniczny
 
 Świadomie odłożone; wracamy wg triggera.
 
-| # | Co | Trigger / termin |
+| # | Co | Trigger |
 |---|---|---|
-| 5.1 | **Konsolidacja tagów w DB** — skrypt SQL scalający warianty pisowni (2567 → docelowo ~300); po nim ewentualna re-indeksacja top-50 tagów | Po ustabilizowaniu nowego promptu (miesiąc) |
-| 5.2 | ~~**Person JSON-LD + `/redakcja`**~~ ✅ 2026-08-11 | ~~Po decyzji o nazwisku~~ zrobione |
-| 5.3 | **Miniatury: preferencja ≥1200 px + re-host wszystkich na Supabase Storage** (Discover + kontrola nad LCP + wąska whitelist w `next.config.ts`) | Przy pracach nad Discover |
-| 5.4 | **Newsletter: double opt-in + unsubscribe + wysyłka (Resend)** — wymaga migracji DB (`confirmation_token`, `confirmed_at`) | Przed pierwszą wysyłką (RODO) |
-| 5.5 | **Rate limit na Upstash Redis** (obecny in-memory jest per-instancję) | > 100 req/min na API albo anomalia w logach |
-| 5.6 | **Paginacja ścieżkowa** `/kategoria/[slug]/strona/[nr]` (przywraca pełne ISR; dziś `searchParams` wymusza per-request render) | Gdy TTFB kategorii zacznie ciążyć w GSC |
-| 5.7 | **Vercel Queues dla pipeline** (per-artykuł budżet 300 s, retry) | > 10 artykułów/dzień albo częste aborty |
-| 5.8 | **DNS rebinding guard** (pinning resolvera w safe-fetch) | Niskie ryzyko na Vercelu; przy okazji prac nad scraperem |
-| 5.9 | **CSP nonce zamiast `unsafe-inline`** | Gdy Next ustabilizuje nonce streaming |
-| 5.10 | **CI (GitHub Actions): lint + tsc + test + build na PR** | Pierwszy wspólny kontrybutor albo po prostu wolny wieczór |
-| 5.11 | **E2E (Playwright) dla ścieżek krytycznych** | Po CI |
-| 5.12 | **PostgREST `db-max-rows`** — świadomość limitu 1000 (kod już stronicuje; przy dużych nowych zapytaniach pamiętać) | stale |
+| 7.1 | **Konsolidacja tagów w DB** (scalenie wariantów, 2618 → ~300) + ewentualna re-indeksacja top-50 lub zastąpienie hubami (§5.2) | Przed hubami tematycznymi |
+| 7.2 | **Paginacja ścieżkowa** `/kategoria/[slug]/strona/[nr]` (pełne ISR zamiast renderu per-request, prawdziwe 404 dla pustych stron zamiast 200+noindex) + 301 dla `?page=` | TTFB kategorii w CrUX > 800 ms albo wzrost ruchu na listach |
+| 7.3 | **Miniatury: preferencja ≥ 1200 px (`og:image:width`) + re-host do Storage** | Prace nad Discover (§5.3) |
+| 7.4 | ~~**Newsletter: double opt-in + unsubscribe**~~ ✅ 2026-10-28 przez MailerLite. Zostało: szkic kampanii tygodniowej przez API MailerLite (D2-A), mail powitalny | Decyzja D2 |
+| 7.5 | **Rate limit na Upstash Redis** (obecny in-memory per instancja) | > 100 req/min na API albo anomalia w logach |
+| 7.6 | **Vercel Queues dla pipeline'u** | > 10 artykułów/dzień albo przerwane runy |
+| 7.7 | **DNS rebinding guard** (pinning resolvera w safe-fetch) | Prace nad scraperem; niskie ryzyko na Vercelu |
+| 7.8 | **CSP z nonce zamiast `unsafe-inline`** — wymaga renderu per-request (koniec ISR/CDN dla HTML), więc dziś koszt > zysk | Gdy Next da nonce kompatybilny z ISR albo pojawi się treść od użytkowników |
+| 7.9 | **E2E (Playwright)**: home, artykuł, 404, kategoria, wyszukiwarka, newsletter | Po starcie Vercel Pro (preview deploys = środowisko testów) |
+| 7.10 | **Retencja `pipeline_events`** (dziś 4,1 tys. wierszy, ~5 tys./rok) — czyszczenie > 180 dni | > 50 tys. wierszy |
+| 7.11 | **`generateSitemaps`** (podział sitemapy) | > 40 tys. artykułów |
+| 7.12 | **Karta OG z fontem marki** (dziś domyślny font silnika — poprawne polskie znaki, ale lżejszy krój niż logo) | Prace nad brandingiem |
+| 7.13 | **Monitoring błędów** (Sentry lub Vercel Observability) + uptime (np. Better Stack) | Vercel Pro (D7) |
+| 7.14 | **Typy Supabase** (`supabase gen types`) zamiast rzutowań w `data.ts` | Następna większa zmiana schematu |
+| 7.15 | **Ponawianie źródeł po błędach przejściowych** (timeout, 429, 5xx): dziś każda porażka pobrania oznacza URL jako przetworzony na stałe. Wymaga kolumny `attempts` w `scraped_items` (dedup traktuje KAŻDY wiersz jako przetworzony) — bez limitu prób trwale padające źródło zajmowałoby slot w każdym runie | `scrape_skip` z przyczyną `timeout`/`http-5xx` > 5% runów (telemetria od tej wersji) |
 
 ---
 
-## 6. KPI
+## 8. KPI
+
+**Baseline (2026-10-28):** 1902 artykuły · sitemap na produkcji 1371 URL-i (po wdrożeniu ~1910) · 14 dni: 117 artykułów, śr. 801 słów, 0 przerwanych runów, 12 pominiętych źródeł (`scrape_skip`), 1 odrzut jakości, 1 odmowa AI · synteza wielu źródeł 3% · miniatury AI 5% · koszt/artykuł — **nieznany** (logowanie naprawione w tej wersji; szacunek ~$0,05).
 
 **SEO (tygodniowo, GSC):**
-- Zaindeksowane strony: artykuły ↑, tagi ↓ (do ~0)
-- Średnia pozycja i CTR dla 10 fraz śledzonych (np. „wiadomości AI", „nowy model OpenAI", „Claude po polsku")
-- Wyświetlenia z Discover (osobna zakładka w GSC) — **główny wskaźnik sukcesu strategii**
-- Crawl errors: 0 × 4xx z sitemapy
+- Zaindeksowane artykuły ↑ (cel: > 90% z sitemapy w 4 tygodnie po wdrożeniu); tagi ↓ do ~0; „Soft 404" → 0
+- Wyświetlenia z Discover — **główny wskaźnik sukcesu strategii**
+- Średnia pozycja i CTR dla 10 śledzonych fraz
+- Core Web Vitals (CrUX, mobile): LCP < 2,5 s, INP < 200 ms, CLS < 0,1
 
 **Produkt (miesięcznie):**
-- Subskrybenci newslettera (cel: +100/mies. po starcie wysyłki)
-- Teksty autorskie opublikowane (cel: ≥4/mies.)
-- Pipeline success rate > 80% i koszt OpenRouter/dzień < 1 USD (dashboard `/admin`)
+- Subskrybenci newslettera (po D2: +100/mies.)
+- Teksty autorskie (cel ≥ 4/mies.)
+- Pipeline: success rate > 85%, synteza wielu źródeł > 15% (po §5.1), koszt/dzień (z `/admin`)
 
-**Finanse (miesięcznie):**
-- Przychód łączny wg źródła (display / afiliacja / sponsorowane / newsletter)
-- Próg rentowności #1: przychód > koszty infrastruktury (OpenRouter + ewentualny Vercel Pro)
-- Kamień milowy: pierwszy 1000 zł/mies. (realnie: miesiąc 6–9 przy konsekwentnej realizacji)
+**Finanse (miesięcznie):** przychód wg źródła; próg #1: przychód > koszty (OpenRouter + Vercel Pro + Supabase); kamień milowy: 1000 zł/mies.
+
+---
+
+## 9. Historia
+
+Szczegóły w `git log`. Najważniejsze etapy:
+
+- **2026-08-10 — audyt produkcyjny:** Next 16.3, SSRF domknięty (`safe-fetch`), Server Actions admina z autoryzacją wewnątrz, sitemapa stronicowana (limit 1000 wierszy PostgREST), tagi `noindex` i poza sitemapą, pipeline z katalogiem tagów, `updated_at` tylko przy zmianie treści (005), usunięty `/api/cron/seed`.
+- **2026-08-11 — SEO i jakość:** linkowanie wewnętrzne z whitelistą slugów, `news-sitemap.xml`, IndexNow, Preferred Sources, `/o-serwisie` jako strona transparentności, `/redakcja` (nazwisko firmuje serwis, nie artykuły), model **Claude Sonnet 5**, prompt 700–1200 słów z „Co to oznacza dla Polski", synteza wielu źródeł, tagi 3-stopniowe, wolumen 3×3/dzień, home „najnowsze na górze".
+- **2026-08-12 — UX/brand:** favicon i ikony z glifów logo (light/dark), paginacja tagów, aktywny pill kategorii po hydratacji, fallback `popular_tags` stronicowany.
+- **2026-10-28 — audyt i refaktoryzacja** (§1).
 
 ---
 

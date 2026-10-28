@@ -149,8 +149,8 @@ export default function AboutPage() {
         </h2>
         <p className="text-sm text-muted-foreground leading-relaxed mb-4">
           Piszemy wyłącznie na podstawie renomowanych źródeł o ugruntowanej reputacji. Należą do
-          nich m.in.: oficjalne blogi OpenAI, Google AI i DeepMind, Anthropic i Hugging Face,
-          serwisy MIT Technology Review, TechCrunch, The Verge, Ars Technica, Wired i VentureBeat,
+          nich m.in.: oficjalne blogi OpenAI, Google AI, Google DeepMind, NVIDIA i Hugging Face,
+          serwisy MIT Technology Review, TechCrunch, The Verge, Ars Technica, Wired i The Decoder,
           repozytorium naukowe arXiv, a z polskiego podwórka Spider&apos;s Web, AntyWeb
           i Niebezpiecznik.
         </p>
@@ -216,11 +216,11 @@ export default function AboutPage() {
           Ten sam adres działa dla propozycji tematów, sugestii nowych źródeł i współpracy.
         </p>
         <a
-          href="mailto:kontakt@aifeed.pl"
+          href={`mailto:${siteConfig.contactEmail}`}
           className="inline-flex items-center gap-2 rounded-lg border border-border/60 bg-card/80 px-4 py-2.5 text-sm font-medium transition-all duration-300 hover:border-primary/40 hover:bg-card"
         >
           <Mail className="size-4" />
-          kontakt@aifeed.pl
+          {siteConfig.contactEmail}
         </a>
       </section>
     </div>

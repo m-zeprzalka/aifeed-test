@@ -11,6 +11,10 @@ export interface RSSSource {
   alwaysRelevant?: boolean;
 }
 
+// Usunięte 2026-10-28 (martwe — tylko błędy w logach każdego runu):
+// Microsoft AI Blog (blogs.microsoft.com/ai/feed → 410 Gone) i "Anthropic
+// Research" (anthropic.com/rss.xml → 404; Anthropic nie publikuje RSS —
+// jego newsy i tak docierają przez TechCrunch/The Verge/The Decoder).
 export const RSS_SOURCES: readonly RSSSource[] = [
   // ===== Główne serwisy technologiczne =====
   {
@@ -64,6 +68,8 @@ export const RSS_SOURCES: readonly RSSSource[] = [
     name: "ZDNet AI",
     url: "https://www.zdnet.com/topic/artificial-intelligence/rss.xml",
     category: "narzedzia",
+    // Od 2026-10 ZDNet przekierowuje ten adres na ogólny /rss/news/ —
+    // bez alwaysRelevant filtr słów kluczowych odsiewa teksty spoza AI.
   },
   {
     name: "Simon Willison",
@@ -76,13 +82,15 @@ export const RSS_SOURCES: readonly RSSSource[] = [
   // ===== Blogi firmowe producentów AI =====
   {
     name: "OpenAI Blog",
-    url: "https://openai.com/blog/rss.xml",
+    // Kanoniczny adres (stary /blog/rss.xml odpowiada 307 → /news/rss.xml).
+    url: "https://openai.com/news/rss.xml",
     category: "modele-ai",
     alwaysRelevant: true,
   },
   {
     name: "Google AI Blog",
-    url: "https://blog.google/technology/ai/rss/",
+    // Kanoniczny adres po przebudowie blog.google (stary → 301).
+    url: "https://blog.google/innovation-and-ai/technology/ai/rss/",
     category: "modele-ai",
     alwaysRelevant: true,
   },
@@ -91,13 +99,6 @@ export const RSS_SOURCES: readonly RSSSource[] = [
     url: "https://deepmind.google/blog/rss.xml",
     category: "badania",
     alwaysRelevant: true,
-  },
-  {
-    name: "Microsoft AI Blog",
-    url: "https://blogs.microsoft.com/ai/feed/",
-    category: "biznes",
-    // No alwaysRelevant — feed mixes corporate AI announcements with generic
-    // cloud/business posts. Keyword filter weeds those out.
   },
   {
     name: "NVIDIA AI Blog",
@@ -110,12 +111,6 @@ export const RSS_SOURCES: readonly RSSSource[] = [
     name: "Hugging Face Blog",
     url: "https://huggingface.co/blog/feed.xml",
     category: "narzedzia",
-    alwaysRelevant: true,
-  },
-  {
-    name: "Anthropic Research",
-    url: "https://www.anthropic.com/rss.xml",
-    category: "badania",
     alwaysRelevant: true,
   },
 

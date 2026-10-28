@@ -23,8 +23,9 @@
 -- wymagałaby ekstensji `unaccent` + custom dictionary.
 -- =============================================================================
 
--- Ekstensja pg_trgm dla trigram similarity search.
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
+-- Ekstensja pg_trgm dla trigram similarity search — w schemacie `extensions`
+-- (konwencja Supabase; `public` zostaje wyłącznie dla obiektów aplikacji).
+CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA extensions;
 
 -- Computed column `search_vector` — wagi:
 --   A (najwyższa) = title
@@ -48,7 +49,7 @@ CREATE INDEX IF NOT EXISTS idx_articles_fts
 -- tsquery (literówki, częściowe dopasowania). PostgREST `.ilike` używa tego
 -- indeksu automatycznie gdy query > 3 znaki.
 CREATE INDEX IF NOT EXISTS idx_articles_title_trgm
-  ON articles USING GIN (title gin_trgm_ops);
+  ON articles USING GIN (title extensions.gin_trgm_ops);
 
 -- =============================================================================
 -- Quick smoke test po migracji:

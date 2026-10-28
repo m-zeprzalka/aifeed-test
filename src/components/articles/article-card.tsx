@@ -1,11 +1,13 @@
 import Link from "next/link";
 import { Clock } from "lucide-react";
 import { Thumbnail } from "@/components/ui/thumbnail";
-import type { Article, Category, Tag } from "@/types/database";
+import { ImageFallback } from "@/components/ui/image-fallback";
+import type { ArticleCardData } from "@/lib/data";
+import { formatDateShort } from "@/lib/dates";
 
 interface ArticleCardProps {
-  article: Article & { category: Category | null; tags: Tag[] };
-  variant?: "default" | "featured" | "compact";
+  article: ArticleCardData;
+  variant?: "default" | "featured" | "compact" | "tile";
   className?: string;
   /**
    * Set on cards rendered above the fold. Forwards to `<Image priority />`,
@@ -22,6 +24,7 @@ export function ArticleCard({ article, variant = "default", className = "", prio
   // to the variant's natural default rather than forcing `false`.
   if (variant === "featured") return <FeaturedCard article={article} className={className} priority={priority ?? true} />;
   if (variant === "compact") return <CompactCard article={article} className={className} />;
+  if (variant === "tile") return <TileCard article={article} className={className} priority={priority ?? false} />;
   return <DefaultCard article={article} className={className} priority={priority ?? false} />;
 }
 
@@ -40,10 +43,9 @@ function FeaturedCard({ article, className, priority = true }: { article: Articl
             className="object-cover transition-transform duration-700 ease-out group-hover:scale-[1.03]"
             sizes="(max-width: 768px) 100vw, 60vw"
             priority={priority}
-            fallbackClassName="h-full w-full bg-gradient-to-br from-primary/20 via-accent/10 to-muted"
           />
         ) : (
-          <div className="h-full w-full bg-gradient-to-br from-primary/20 via-accent/10 to-muted" />
+          <ImageFallback />
         )}
       </div>
       <div className="gradient-overlay absolute inset-0 z-10" />
@@ -99,7 +101,7 @@ function DefaultCard({ article, className, priority = false }: { article: Articl
             priority={priority}
           />
         ) : (
-          <div className="h-full w-full bg-gradient-to-br from-muted to-muted/50" />
+          <ImageFallback />
         )}
       </div>
       <div className="flex flex-1 flex-col p-5">
@@ -139,7 +141,7 @@ function CompactCard({ article, className }: { article: ArticleCardProps["articl
         {article.thumbnail_url ? (
           <Thumbnail src={article.thumbnail_url} alt={article.title} fill className="object-cover" sizes="96px" />
         ) : (
-          <div className="h-full w-full bg-gradient-to-br from-muted to-muted/50" />
+          <ImageFallback />
         )}
       </div>
       <div className="flex flex-1 flex-col justify-center min-w-0 py-1">
@@ -170,17 +172,47 @@ function CompactCard({ article, className }: { article: ArticleCardProps["articl
   );
 }
 
-// Drop the year for articles published in the current calendar year. Anything
-// older than that gets the year back so a 2024 piece doesn't read as "20 kwietnia"
-// in 2026 and confuse readers about freshness.
+/**
+ * Kafelek: obraz 16:10 + tytuł + data. Siatki 4-kolumnowe na home (świeże
+ * pozycje 6–9 i sekcje kategorii w układzie B) — wcześniej dwie kopie tego
+ * samego markupu w page.tsx.
+ */
+function TileCard({ article, className, priority = false }: { article: ArticleCardProps["article"]; className: string; priority?: boolean }) {
+  return (
+    <Link
+      href={`/artykul/${article.slug}`}
+      className={`group flex flex-col overflow-hidden rounded-xl border border-border/60 bg-card card-hover ${className}`}
+    >
+      <div className="relative aspect-[16/10] overflow-hidden bg-muted">
+        {article.thumbnail_url ? (
+          <Thumbnail
+            src={article.thumbnail_url}
+            alt={article.title}
+            fill
+            className="object-cover transition-transform duration-700 ease-out group-hover:scale-[1.03]"
+            sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 25vw"
+            priority={priority}
+          />
+        ) : (
+          <ImageFallback />
+        )}
+      </div>
+      <div className="p-3">
+        <h3 className="text-sm font-bold leading-snug line-clamp-2 group-hover:text-primary transition-colors duration-300">
+          {article.title}
+        </h3>
+        {article.published_at && (
+          <time dateTime={article.published_at} className="mt-2 text-xs font-mono text-muted-foreground block">
+            {formatDate(article.published_at)}
+          </time>
+        )}
+      </div>
+    </Link>
+  );
+}
+
+// Rok tylko dla artykułów spoza bieżącego roku (tekst z 2025 nie może
+// wyglądać na tegoroczny); strefa Europe/Warsaw — zob. lib/dates.ts.
 function formatDate(dateStr: string | null): string {
-  if (!dateStr) return "";
-  const d = new Date(dateStr);
-  const now = new Date();
-  const showYear = d.getFullYear() !== now.getFullYear();
-  return d.toLocaleDateString("pl-PL", {
-    day: "numeric",
-    month: "long",
-    ...(showYear && { year: "numeric" }),
-  });
+  return dateStr ? formatDateShort(dateStr) : "";
 }

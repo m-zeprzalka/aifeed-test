@@ -1,9 +1,9 @@
 import { ArticleCard } from "@/components/articles/article-card";
-import type { ArticleWithRelations } from "@/lib/data";
+import type { ArticleCardData } from "@/lib/data";
 import { cn } from "@/lib/utils";
 
 interface ArticleGridProps {
-  articles: ArticleWithRelations[];
+  articles: ArticleCardData[];
   /** Nadpisania kolumn (twMerge), np. "lg:grid-cols-2" na /szukaj. */
   className?: string;
 }

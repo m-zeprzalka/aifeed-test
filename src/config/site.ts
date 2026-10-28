@@ -7,6 +7,9 @@ export const siteConfig = {
   // w każdym środowisku bez ustawionej zmiennej. Trailing slash zdejmowany,
   // bo wszystkie URL-e budujemy przez konkatenację `${url}/sciezka`.
   url: (process.env.NEXT_PUBLIC_SITE_URL || "https://www.aifeed.pl").replace(/\/+$/, ""),
+  // Jedyny kanał kontaktu redakcyjnego (korekty, RODO, współpraca) — RSS
+  // managingEditor, JSON-LD organizacji, /o-serwisie, /redakcja, polityka.
+  contactEmail: "kontakt@aifeed.pl",
   // Empty until real social profiles exist. Once founded, fill in and they
   // automatically populate JSON-LD `Organization.sameAs` and the `via=`
   // parameter on Twitter/X share intents.
@@ -19,9 +22,9 @@ export const siteConfig = {
   // Użytkownicy z dodanym źródłem klikają ~2× częściej (dane Google, 2026).
   // Domena celowo hardcoded na produkcyjną — feature ma sens tylko tam.
   preferredSourcesUrl: "https://www.google.com/preferences/source?q=aifeed.pl",
-  // Autor i twórca serwisu (decyzja właściciela 2026-08-11: serwis firmowany
-  // nazwiskiem — filar 1 SEO / E-E-A-T). Zasila Person JSON-LD (/redakcja,
-  // NewsArticle.author, founder w NewsMediaOrganization) i byline artykułów.
+  // Twórca serwisu (decyzja właściciela 2026-08-11: nazwisko firmuje SERWIS,
+  // nie pojedyncze artykuły — autor artykułów to Organization, bez bylinu).
+  // Zasila Person JSON-LD na /redakcja i `founder` w NewsMediaOrganization.
   // `sameAs` tylko zweryfikowane, istniejące profile — bez wydmuszek.
   author: {
     name: "Michał Zeprzałka",
@@ -43,3 +46,12 @@ export const siteConfig = {
 } as const;
 
 export type SiteConfig = typeof siteConfig;
+
+export type CategorySlug = (typeof siteConfig.categories)[number]["slug"];
+
+/** Zamknięty katalog kategorii — pipeline, quality gate i routing kategorii. */
+export const CATEGORY_SLUGS: readonly CategorySlug[] = siteConfig.categories.map((c) => c.slug);
+
+export function isCategorySlug(value: unknown): value is CategorySlug {
+  return typeof value === "string" && (CATEGORY_SLUGS as readonly string[]).includes(value);
+}

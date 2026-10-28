@@ -32,24 +32,10 @@ export interface Tag {
   slug: string;
 }
 
-export interface ArticleTag {
-  article_id: string;
-  tag_id: string;
-}
+/** Kategoria w postaci osadzonej w kartach artykułów (bez opisu/koloru). */
+export type CategoryRef = Pick<Category, "id" | "name" | "slug">;
 
-export interface ScrapedItem {
-  id: string;
-  source_url: string;
-  title: string;
-  description: string | null;
-  source_name: string | null;
-  scraped_at: string;
-  is_processed: boolean;
-}
-
-// Joined type dla frontendu żyje w `src/lib/data.ts` (ArticleWithRelations).
-// Dawne warianty (ArticleWithCategory / ArticleFull) i generyczny typ
-// `Database` były martwym kodem — klienty Supabase w tym projekcie są
-// nietypowane; jeśli kiedyś przejdziemy na `createClient<Database>()`,
-// wygeneruj typy przez `supabase gen types typescript` zamiast utrzymywać
-// je ręcznie.
+// Typy złączeń dla frontendu żyją w `src/lib/data.ts` (`ArticleCardData`,
+// `ArticleWithRelations`). Klienty Supabase w tym projekcie są nietypowane;
+// jeśli kiedyś przejdziemy na `createClient<Database>()`, wygeneruj typy
+// przez `supabase gen types typescript` zamiast utrzymywać je ręcznie.

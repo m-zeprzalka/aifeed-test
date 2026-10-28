@@ -64,7 +64,7 @@ export async function GET() {
   <link>${escapeXml(baseUrl)}</link>
   <description>${cdata(siteConfig.description)}</description>
   <language>pl-PL</language>
-  <managingEditor>kontakt@aifeed.pl (AiFeed)</managingEditor>
+  <managingEditor>${siteConfig.contactEmail} (${escapeXml(siteConfig.name)})</managingEditor>
   <atom:link href="${escapeXml(`${baseUrl}/feed.xml`)}" rel="self" type="application/rss+xml"/>
   <lastBuildDate>${new Date().toUTCString()}</lastBuildDate>
   <image>

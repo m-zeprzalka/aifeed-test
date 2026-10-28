@@ -12,7 +12,9 @@ import { TableOfContents } from "@/components/articles/table-of-contents";
 import { siteConfig } from "@/config/site";
 import { jsonLdScript } from "@/lib/jsonld";
 import { slugifyHeading } from "@/lib/heading-id";
-import { articleMetadata, notFoundMetadata } from "@/lib/seo";
+import { articleMetadata, notFoundMetadata, publisherReference } from "@/lib/seo";
+import { decodeHtmlEntities } from "@/lib/html-entities";
+import { formatDateLong } from "@/lib/dates";
 import type { Metadata } from "next";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -68,19 +70,13 @@ export default async function ArticlePage({ params }: PageProps) {
   if (!article) notFound();
 
   const [relatedArticles, adjacent] = await Promise.all([
-    getRelatedArticles(article.id, 3),
+    getRelatedArticles(article, 3),
     article.category_id && article.published_at
       ? getAdjacentArticles(article.id, article.category_id, article.published_at)
       : Promise.resolve({ prev: null, next: null }),
   ]);
 
-  const publishedDate = article.published_at
-    ? new Date(article.published_at).toLocaleDateString("pl-PL", {
-        year: "numeric",
-        month: "long",
-        day: "numeric",
-      })
-    : null;
+  const publishedDate = article.published_at ? formatDateLong(article.published_at) : null;
 
   const articleUrl = `${siteConfig.url}/artykul/${article.slug}`;
 
@@ -120,21 +116,13 @@ export default async function ArticlePage({ params }: PageProps) {
       dateModified: article.updated_at || article.published_at,
     }),
     // Organization, NIE Person — decyzja właściciela (2026-08-11): nazwisko
-    // firmuje SERWIS (Person JSON-LD na /redakcja + `founder` w layout.tsx),
-    // ale nie pojedyncze artykuły. Per-artykuł Person sugerowałby ręczne
-    // autorstwo każdego tekstu — przy zautomatyzowanym pipeline to profil
-    // "fikcyjnych bylines" (BNN Breaking). Nie przywracać bez zmiany procesu.
-    author: {
-      "@type": "Organization",
-      name: siteConfig.name,
-      url: siteConfig.url,
-    },
-    publisher: {
-      "@type": "Organization",
-      name: siteConfig.name,
-      url: siteConfig.url,
-      logo: { "@type": "ImageObject", url: `${siteConfig.url}/icon-512.png` },
-    },
+    // firmuje SERWIS (Person na /redakcja + `founder` organizacji), ale nie
+    // pojedyncze artykuły. Per-artykuł Person przy zautomatyzowanym pipeline
+    // to profil "fikcyjnych bylines" (BNN Breaking). Nie przywracać bez zmiany
+    // procesu. Autor i wydawca = ta sama encja (`@id`) co NewsMediaOrganization
+    // w root layoucie — z politykami redakcyjnymi i założycielem.
+    author: publisherReference(),
+    publisher: publisherReference(),
     mainEntityOfPage: { "@type": "WebPage", "@id": articleUrl },
     ...(article.tags.length > 0 && { keywords: article.tags.map((t) => t.name).join(", ") }),
     ...(wordCount && { wordCount }),
@@ -227,7 +215,10 @@ export default async function ArticlePage({ params }: PageProps) {
                   rel="noopener noreferrer"
                   className="underline underline-offset-2 hover:text-muted-foreground transition-colors"
                 >
-                  {article.thumbnail_source}
+                  {/* Stare rekordy mają atrybucję z nieodkodowanymi encjami
+                      (np. "Spider&#x27;s Web") — pipeline dekoduje je od
+                      2026-10, tu naprawiamy wyświetlanie historycznych. */}
+                  {decodeHtmlEntities(article.thumbnail_source)}
                 </a>
               </p>
             )}
@@ -391,7 +382,7 @@ export default async function ArticlePage({ params }: PageProps) {
             <h2
               className="mb-6 text-2xl font-bold tracking-tight"
             >
-              Podobne Publikacje
+              Podobne publikacje
             </h2>
             <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
               {relatedArticles.map((a) => (

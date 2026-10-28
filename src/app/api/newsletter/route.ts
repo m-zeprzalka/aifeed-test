@@ -1,56 +1,54 @@
-import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { clientIp } from "@/lib/request-ip";
+import { subscribeToNewsletter } from "@/lib/newsletter/mailerlite";
 
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * Zapis na newsletter → MailerLite (double opt-in, `lib/newsletter/mailerlite.ts`).
+ * Odpowiedź dla "nowy adres" i "adres już na liście" jest identyczna — nie
+ * zdradzamy, kto jest subskrybentem.
+ */
 export async function POST(request: Request) {
+  // Limit (5 req/min/IP) jest zdefiniowany centralnie w `LIMITS` w
+  // `src/lib/rate-limit.ts` — tu trzymamy tylko typ klucza.
+  const { allowed } = await checkRateLimit("newsletter", clientIp(request));
+  if (!allowed) {
+    return NextResponse.json({ error: "Zbyt wiele prób. Spróbuj za chwilę." }, { status: 429 });
+  }
+
+  let payload: { email?: unknown; website?: unknown };
   try {
-    const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
-      || request.headers.get("x-real-ip")
-      || "unknown";
-
-    // Limit (5 req/min/IP) jest zdefiniowany centralnie w `LIMITS` w
-    // `src/lib/rate-limit.ts` — tu trzymamy tylko typ klucza.
-    const { allowed } = await checkRateLimit("newsletter", ip);
-    if (!allowed) {
-      return NextResponse.json(
-        { error: "Zbyt wiele prób. Spróbuj za chwilę." },
-        { status: 429 }
-      );
-    }
-
-    const { email } = await request.json();
-
-    if (!email || typeof email !== "string") {
-      return NextResponse.json({ error: "Email jest wymagany" }, { status: 400 });
-    }
-
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (email.length > 254 || !emailRegex.test(email)) {
-      return NextResponse.json({ error: "Nieprawidłowy adres email" }, { status: 400 });
-    }
-
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!url || !key) {
-      return NextResponse.json({ error: "Błąd konfiguracji serwera" }, { status: 500 });
-    }
-
-    const supabase = createClient(url, key);
-
-    const { error } = await supabase
-      .from("newsletter_subscribers")
-      .upsert(
-        { email: email.toLowerCase().trim(), subscribed_at: new Date().toISOString() },
-        { onConflict: "email" }
-      );
-
-    if (error) {
-      console.error("[newsletter] Insert failed:", error.message);
-      return NextResponse.json({ error: "Nie udało się zapisać. Spróbuj ponownie." }, { status: 500 });
-    }
-
-    return NextResponse.json({ success: true });
+    payload = await request.json();
   } catch {
-    return NextResponse.json({ error: "Wystąpił błąd" }, { status: 500 });
+    return NextResponse.json({ error: "Nieprawidłowe żądanie" }, { status: 400 });
+  }
+
+  // Honeypot: pole niewidoczne dla ludzi, wypełniane przez boty. Udajemy
+  // sukces (bot nie dostaje sygnału), ale niczego nie wysyłamy — fałszywe
+  // zapisy to odbicia i skargi na spam, które psują reputację nadawcy.
+  if (typeof payload.website === "string" && payload.website.trim() !== "") {
+    return NextResponse.json({ success: true });
+  }
+
+  const email = typeof payload.email === "string" ? payload.email.trim().toLowerCase() : "";
+  if (!email) {
+    return NextResponse.json({ error: "Email jest wymagany" }, { status: 400 });
+  }
+  if (email.length > 254 || !EMAIL_PATTERN.test(email)) {
+    return NextResponse.json({ error: "Nieprawidłowy adres email" }, { status: 400 });
+  }
+
+  switch (await subscribeToNewsletter(email)) {
+    case "created":
+    case "existing":
+      return NextResponse.json({ success: true });
+    case "invalid-email":
+      return NextResponse.json({ error: "Nieprawidłowy adres email" }, { status: 400 });
+    case "not-configured":
+      return NextResponse.json({ error: "Zapisy na newsletter ruszają wkrótce." }, { status: 503 });
+    case "error":
+      return NextResponse.json({ error: "Nie udało się zapisać. Spróbuj ponownie za chwilę." }, { status: 502 });
   }
 }

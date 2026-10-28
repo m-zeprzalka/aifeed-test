@@ -42,14 +42,15 @@ export function NewsletterForm({ variant = "default" }: NewsletterFormProps) {
   };
 
   if (status === "success") {
-    // Double opt-in: zapis jest aktywny dopiero po kliknięciu w link z maila.
+    // Zapis od razu aktywny; wiadomość powitalną wysyła automatyzacja MailerLite.
+    // Ten sam komunikat dla nowego i istniejącego adresu (nie zdradzamy listy).
     // green-700/300 zamiast 600/400 — kontrast WCAG AA na tle muted.
     return (
       <div role="status" className="flex items-start gap-2 text-sm text-green-700 dark:text-green-300">
         <MailCheck className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
         <span>
-          <strong className="font-semibold">Prawie gotowe!</strong> Sprawdź skrzynkę i kliknij link
-          potwierdzający — bez tego nie wyślemy Ci newslettera.
+          <strong className="font-semibold">Dziękujemy za zapis!</strong> Witamy w newsletterze
+          AiFeed — najważniejsze wieści ze świata AI trafią prosto do Twojej skrzynki.
         </span>
       </div>
     );
@@ -110,7 +111,7 @@ export function NewsletterForm({ variant = "default" }: NewsletterFormProps) {
         </p>
       ) : (
         <p id="newsletter-consent" className="text-[11px] leading-snug text-muted-foreground/80">
-          Wyślemy e-mail z linkiem potwierdzającym. Wypiszesz się jednym kliknięciem.{" "}
+          Zapisując się, zgadzasz się na otrzymywanie newslettera. Wypiszesz się jednym kliknięciem.{" "}
           <Link href="/polityka-prywatnosci" className="underline underline-offset-2 hover:text-foreground">
             Polityka prywatności
           </Link>

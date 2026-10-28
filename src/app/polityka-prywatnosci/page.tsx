@@ -76,13 +76,13 @@ export default function PrivacyPage() {
           </h3>
           <p className="text-sm text-muted-foreground leading-relaxed">
             Jedyną sytuacją, w której zbieramy dane osobowe, jest dobrowolny zapis na newsletter.
-            Przetwarzamy wyłącznie podany adres e-mail w celu wysyłki informacji o nowych
+            Przetwarzamy podany adres e-mail w celu wysyłki informacji o nowych
             artykułach. Listę mailingową prowadzimy w systemie MailerLite (MailerLite Limited,
             Irlandia), który przetwarza adres w naszym imieniu na podstawie umowy powierzenia
-            przetwarzania danych. Po zapisie wysyłamy wiadomość z linkiem
-            potwierdzającym — bez kliknięcia w link adres nie zostanie aktywowany i nie otrzymasz
-            newslettera. Każda wiadomość zawiera link rezygnacji, a usunięcia adresu możesz zażądać
-            w każdej chwili pod adresem {siteConfig.contactEmail}.
+            przetwarzania danych. Jako dowód udzielenia zgody MailerLite zapisuje datę oraz
+            adres IP zapisu. Po zapisie wysyłamy wiadomość potwierdzającą zapis. Każda wiadomość
+            zawiera link rezygnacji, a usunięcia adresu możesz zażądać w każdej chwili pod adresem{" "}
+            {siteConfig.contactEmail}.
           </p>
         </section>
 

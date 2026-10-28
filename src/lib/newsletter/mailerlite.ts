@@ -1,7 +1,9 @@
+import { isIP } from "node:net";
+
 /**
  * MailerLite — jedyny system ewidencji newslettera (grupa subskrybentów,
- * double opt-in, wypisy, historia zgód). Nie trzymamy kopii adresów w
- * Supabase: minimalizacja danych (RODO) i jedno źródło prawdy dla wysyłek.
+ * wypisy, historia zgód). Nie trzymamy kopii adresów w Supabase:
+ * minimalizacja danych (RODO) i jedno źródło prawdy dla wysyłek.
  *
  * API: `POST https://connect.mailerlite.com/api/subscribers` (create/upsert),
  * `Authorization: Bearer <token>`, limit 120 żądań/min na konto.
@@ -20,11 +22,11 @@ const API_VERSION = "2026-10-28";
 const REQUEST_TIMEOUT_MS = 8_000;
 
 export type SubscribeResult =
-  /** Nowy subskrybent — przy włączonym double opt-in czeka na kliknięcie w link. */
+  /** Nowy subskrybent — od razu aktywny. */
   | "created"
   /**
-   * Adres był już w MailerLite: został dopisany do grupy, status bez zmian
-   * (aktywny zostaje aktywny, niepotwierdzony dostaje ponownie e-mail z linkiem).
+   * Adres był już w MailerLite: dopisany do grupy. Wypisany zostaje wypisany
+   * (bez `resubscribe` API nie przywraca zgody, którą ktoś cofnął).
    */
   | "existing"
   | "invalid-email"
@@ -38,6 +40,12 @@ export interface MailerLiteConfig {
   groupId: string;
 }
 
+export interface SubscribeInput {
+  email: string;
+  /** IP zapisu — dowód zgody przy zapisie bez potwierdzenia linkiem. */
+  ip?: string;
+}
+
 export function mailerLiteConfig(env: Record<string, string | undefined> = process.env): MailerLiteConfig | null {
   const token = env.MAILERLITE_API_TOKEN?.trim();
   const groupId = env.MAILERLITE_GROUP_ID?.trim();
@@ -45,23 +53,24 @@ export function mailerLiteConfig(env: Record<string, string | undefined> = proce
 }
 
 interface MailerLiteResponse {
-  data?: { status?: string };
   message?: string;
   errors?: Record<string, string[]>;
 }
 
 /**
- * Zapis do grupy. Celowo BEZ pola `status`: o double opt-in decyduje
- * ustawienie konta („Double opt-in for API and integrations"), a jawne
- * `status: "unconfirmed"` zdegradowałoby już aktywnego subskrybenta, który
- * wypełni formularz ponownie (przestałby dostawać wydania do czasu
- * kliknięcia). Bez IP: MailerLite sam zapisuje datę i IP potwierdzenia.
+ * Zapis bez double opt-in (decyzja właściciela 2026-10-28): jawne
+ * `status: "active"` — zachowanie nie zależy od ustawienia konta
+ * „Double opt-in for API and integrations". Wiadomość „dziękujemy za zapis"
+ * wysyła automatyzacja MailerLite (wyzwalacz: dołączenie do grupy).
+ *
+ * `ip_address` (tylko poprawny adres — inaczej 422 zablokowałoby zapis)
+ * razem z datą zapisu, którą MailerLite zapisuje sam, dokumentuje zgodę.
  *
  * 201 = nowy subskrybent, 200 = istniejący zaktualizowany (upsert nie usuwa
  * pól ani grup), 422 = walidacja (`errors.email` → zły adres).
  */
 export async function subscribeToNewsletter(
-  email: string,
+  { email, ip }: SubscribeInput,
   config: MailerLiteConfig | null = mailerLiteConfig(),
   fetchImpl: typeof fetch = fetch,
 ): Promise<SubscribeResult> {
@@ -78,7 +87,12 @@ export async function subscribeToNewsletter(
         Accept: "application/json",
         "X-Version": API_VERSION,
       },
-      body: JSON.stringify({ email, groups: [config.groupId] }),
+      body: JSON.stringify({
+        email,
+        groups: [config.groupId],
+        status: "active",
+        ...(ip && isIP(ip) ? { ip_address: ip } : {}),
+      }),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     body = (await res.json().catch(() => null)) as MailerLiteResponse | null;
@@ -87,14 +101,7 @@ export async function subscribeToNewsletter(
     return "error";
   }
 
-  if (res.status === 201) {
-    if (body?.data?.status === "active") {
-      // Nowy adres od razu aktywny = double opt-in dla API jest wyłączony
-      // w ustawieniach konta. Działa, ale bez potwierdzenia adresu.
-      console.warn("[mailerlite] nowy subskrybent od razu aktywny — włącz double opt-in for API w Subscribe settings");
-    }
-    return "created";
-  }
+  if (res.status === 201) return "created";
   if (res.status === 200) return "existing";
   if (res.status === 422 && body?.errors?.email) return "invalid-email";
 

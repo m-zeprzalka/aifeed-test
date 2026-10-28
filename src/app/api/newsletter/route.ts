@@ -6,14 +6,15 @@ import { subscribeToNewsletter } from "@/lib/newsletter/mailerlite";
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
- * Zapis na newsletter → MailerLite (double opt-in, `lib/newsletter/mailerlite.ts`).
+ * Zapis na newsletter → MailerLite (od razu aktywny, `lib/newsletter/mailerlite.ts`).
  * Odpowiedź dla "nowy adres" i "adres już na liście" jest identyczna — nie
  * zdradzamy, kto jest subskrybentem.
  */
 export async function POST(request: Request) {
   // Limit (5 req/min/IP) jest zdefiniowany centralnie w `LIMITS` w
   // `src/lib/rate-limit.ts` — tu trzymamy tylko typ klucza.
-  const { allowed } = await checkRateLimit("newsletter", clientIp(request));
+  const ip = clientIp(request);
+  const { allowed } = await checkRateLimit("newsletter", ip);
   if (!allowed) {
     return NextResponse.json({ error: "Zbyt wiele prób. Spróbuj za chwilę." }, { status: 429 });
   }
@@ -40,7 +41,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Nieprawidłowy adres email" }, { status: 400 });
   }
 
-  switch (await subscribeToNewsletter(email)) {
+  switch (await subscribeToNewsletter({ email, ip })) {
     case "created":
     case "existing":
       return NextResponse.json({ success: true });

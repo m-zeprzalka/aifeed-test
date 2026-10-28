@@ -25,15 +25,16 @@ To jest **kanoniczny dokument planowania**. `README.md` opisuje stan obecny (arc
 
 ## 0. Do zrobienia teraz
 
-Kolejność ma znaczenie. 0.1 i 0.2 wykonane 2026-10-28. Reszta to praca ręczna w panelach, ~30 minut.
+Kolejność ma znaczenie. 0.1–0.4 wykonane 2026-10-28 (w 0.4 zostaje kontrola raportu „Strony" za kilka dni). Reszta to praca ręczna w panelach, ~30 minut.
 
 | # | Co | Dlaczego to P0 |
 |---|---|---|
 | 0.1 | ✅ ~~**Wdróż tę wersję** (§2)~~ — wdrożone 2026-10-28 | Sitemapa na produkcji jest zamrożona od 12.08 — **541 artykułów nie ma w sitemapie**; Next 16.3.0 ma krytyczne CVE (m.in. RCE w `next/og`, którego używamy do ikon i kart OG) |
 | 0.2 | ✅ ~~**Migracje bazy**~~ — 001 → 007 wgrane 2026-10-28 po pełnym backupie i teście na odtworzonej kopii; `verify.sql` = wszystko `true`, dane nietknięte (`supabase/README.md`) | Brak FTS (004 — wyszukiwarka szuka dziś tylko dokładnej frazy w tytułach) i RPC `popular_tags` (001 — „Trendy" i katalog tagów liczone wolnym obejściem). Migracje są idempotentne, addytywne i bezpieczne dla danych |
-| 0.2a | **MailerLite** (newsletter) — kod, token i ID grupy są już na produkcji. Zostało w panelu MailerLite: **„Double opt-in for API and integrations" → ON**, nadawca + uwierzytelnienie domeny `aifeed.pl` (DKIM/SPF + DMARC), opcjonalnie wygląd e-maila potwierdzającego (plan płatny) → `emails/README.md` | Formularz w stopce do 28.10 zwracał błąd (brak tabeli w bazie); teraz zapisuje do grupy „AiFeed — newsletter". Bez włączonego double opt-in adresy są aktywowane bez potwierdzenia |
-| 0.3 | **Vercel → Settings → Domains → `aifeed.pl`**: przekierowanie na `www.aifeed.pl` ustaw jako **308 (permanent)** | Dziś apex odpowiada **307 (tymczasowe)** — Google nie konsoliduje sygnałów z linków do `aifeed.pl` tak pewnie jak przy stałym |
-| 0.4 | **Google Search Console**: Sitemapy → ponownie prześlij `sitemap.xml` (teraz ~1910 URL-i) i `news-sitemap.xml`; Indeksowanie stron → sprawdź „Soft 404" (powinny zniknąć — nieistniejące artykuły zwracają już prawdziwe 404) | Szybsze wciągnięcie 541 brakujących artykułów |
+| 0.2a | **MailerLite** (newsletter) — kod, token i ID grupy są na produkcji, zapis od razu aktywny (bez double opt-in — decyzja 2026-10-28). Zostało w panelu: **automatyzacja z wiadomością powitalną** (szablon `emails/newsletter-powitanie.html`), **uwierzytelnienie domeny `aifeed.pl`** (DKIM/SPF + DMARC w DNS Vercela) → `emails/README.md` | Bez uwierzytelnionej domeny powitania i wydania trafiają do spamu |
+| 0.2b | **Skrzynka `kontakt@aifeed.pl`** — domena nie ma rekordów MX, więc ten adres **nie odbiera poczty**, a polityka prywatności każe pod niego kierować żądania RODO. Najprościej: darmowe przekierowanie (np. ImprovMX) na Twoją skrzynkę — 2 rekordy MX + dopisek do SPF w DNS Vercela. Alternatywa: inny działający adres w `siteConfig.contactEmail` | Wymóg RODO (kontakt w sprawie danych) + odpowiedzi na newsletter + raporty DMARC |
+| 0.3 | ✅ ~~**Przekierowanie `aifeed.pl` → `www`: 308**~~ — ustawione 2026-10-28 (było 307) | Stałe przekierowanie konsoliduje sygnały z linków do `aifeed.pl` na `www.aifeed.pl` |
+| 0.4 | ✅ Sitemapy przesłane 2026-10-28. **Google Search Console**: Sitemapy → ponownie prześlij `sitemap.xml` (teraz ~1910 URL-i) i `news-sitemap.xml`; Indeksowanie stron → sprawdź „Soft 404" (powinny zniknąć — nieistniejące artykuły zwracają już prawdziwe 404) | Szybsze wciągnięcie 541 brakujących artykułów |
 | 0.5 | **[DECYZJA] Zgody na cookies (D1)** — przeczytaj §3 | GA4 działa dziś bez zgody użytkownika; to ryzyko prawne (PKE) i twardy wymóg przed jakąkolwiek reklamą |
 | 0.6 | Rotacja kluczy `SUPABASE_SERVICE_ROLE_KEY` i `OPENROUTER_API_KEY`, **jeśli** nie zrobiłeś tego po wycieku z maja. Dodatkowo **token MailerLite** (był wklejony w rozmowie z asystentem): MailerLite → Integrations → API → nowy token → Vercel `MAILERLITE_API_TOKEN` → redeploy → usuń stary | Jedyny niezamknięty punkt P0 ze starego audytu |
 
@@ -76,7 +77,7 @@ Pełny przegląd kodu, produkcji (HTTP, HTML, sitemapy), bazy (tylko odczyt) i t
 - Daty w strefie **Europe/Warsaw** (serwer w UTC pokazywał artykuł z 0:30 z datą dnia poprzedniego).
 - Pasek kategorii w tej samej kolejności co menu mobilne, stopka i sekcje home (jedno źródło: `siteConfig`).
 - Polityka prywatności zgodna ze stanem faktycznym (GA4, Vercel Analytics, localStorage, MailerLite jako podmiot przetwarzający).
-- **Newsletter na MailerLite** z double opt-in (honeypot, bez kopii adresów w Supabase, identyczna odpowiedź dla nowych i istniejących adresów) + zaprojektowana wiadomość potwierdzająca (`emails/`).
+- **Newsletter na MailerLite**, zapis od razu aktywny z IP jako dowodem zgody (honeypot, bez kopii adresów w Supabase, identyczna odpowiedź dla nowych i istniejących adresów) + zaprojektowana wiadomość powitalna (`emails/`). Domena `aifeed.pl` → `www` przekierowuje **308** (było 307).
 - Admin: odświeżanie strony artykułu/sitemap po zdjęciu tekstu, walidacja argumentów akcji. Cron: porównanie sekretu stałoczasowe. Newsletter: wspólny klient, poprawne kody błędów.
 - Testy 84 → **130** (nowe: bramka jakości, tagi, ekstrakcja treści/og:image, encje, miniatury, daty, kategorie). CI na GitHub Actions. `npm run check`.
 - **Niezależny code review** (osobny agent, bez dostępu do moich założeń) potwierdził niezmienniki i znalazł m.in.: zbyt agresywny detektor angielskich tytułów (odrzucałby „Gemini in Chrome trafia do Polski i UE"), cache'owanie błędów bazy jako pustej sitemapy/404, ryzyko przekroczenia limitu funkcji przy retry — wszystkie poprawione (błędy bazy w ścieżkach ISR rzucają wyjątek → Next zachowuje poprzednią wersję; wywołania AI mają twardy termin).
@@ -115,7 +116,7 @@ Pełny przegląd kodu, produkcji (HTTP, HTML, sitemapy), bazy (tylko odczyt) i t
    - [ ] `curl -sI https://www.aifeed.pl/ | grep -i "x-vercel-id\|content-security"` → CSP obecne; `x-vercel-id` bez `iad1` (strona z CDN bez funkcji)
    - [ ] `curl -s -o /dev/null -w "%{http_code}" "https://www.aifeed.pl/_next/image?url=https%3A%2F%2Fupload.wikimedia.org%2Fwikipedia%2Fcommons%2F4%2F47%2FPNG_transparency_demonstration_1.png&w=64&q=75"` → **400** (było 200)
    - [ ] `https://www.aifeed.pl/admin` → Basic Auth działa
-   - [ ] Formularz newslettera w stopce → „Prawie gotowe! Sprawdź skrzynkę" → mail potwierdzający z MailerLite → klik → adres aktywny w grupie (po kroku 0.2a)
+   - [ ] Formularz newslettera w stopce → „Dziękujemy za zapis!" → adres aktywny w grupie → wiadomość powitalna w głównej skrzynce (po kroku 0.2a)
    - [ ] Wyszukiwarka zwraca wyniki (004 wgrana — FTS)
    - [ ] Po najbliższym cronie: `/admin` → koszt runu > $0; nowy artykuł ma kategorię, tagi, miniaturę
    - [ ] Rich Results Test dla przykładowego artykułu — NewsArticle bez błędów
@@ -142,12 +143,12 @@ Stan: GA4 ustawia cookies `_ga` bez zgody. Od 11.2024 polskie Prawo komunikacji 
 
 ### D2. Newsletter — częstotliwość i treść
 
-✅ **Wybrane narzędzie: MailerLite** (2026-10-28, grupa „AiFeed — newsletter") — zapis z double opt-in z formularza w stopce, MailerLite przechowuje listę, wysyła potwierdzenia i obsługuje wypisy; copy w stopce bez obietnicy „codziennie". Konfiguracja panelu: `emails/README.md` (krok 0.2a).
+✅ **Wybrane narzędzie: MailerLite** (2026-10-28, grupa „AiFeed — newsletter") — zapis z formularza w stopce **od razu aktywny, bez double opt-in** (decyzja właściciela: prostszy zapis, mniej utraconych subskrybentów; dowód zgody = data + IP zapisu). Po zapisie automatyzacja MailerLite wysyła wiadomość powitalną. MailerLite przechowuje listę i obsługuje wypisy; copy w stopce bez obietnicy „codziennie". Konfiguracja panelu i DNS: `emails/README.md` (krok 0.2a).
 
 Do decyzji: **co i jak często wysyłamy.**
 - **A (rekomendowane):** **tygodniowo** — „Tydzień w AI po polsku": automatyczny draft z 5–7 najważniejszych artykułów tygodnia + Twój krótki komentarz (E-E-A-T, §5.2). Technicznie: endpoint tworzący w MailerLite szkic kampanii (API `campaigns`) do Twojej akceptacji — nie automatyczna wysyłka.
 - B: codzienny digest automatyczny (kampania RSS w MailerLite z `feed.xml`) — zero pracy, ale niska wartość i ryzyko wypisów; nie rekomenduję na start.
-- Dodatkowo: mail powitalny po potwierdzeniu (automatyzacja MailerLite z wyzwalaczem „dołączył do grupy") — mogę zaprojektować w stylu wiadomości potwierdzającej.
+- Mail powitalny: ✅ zaprojektowany (`emails/newsletter-powitanie.html`) — wysyła go automatyzacja MailerLite z wyzwalaczem „dołączył do grupy" (krok 0.2a).
 
 ### D3. Miniatury: logo i grafiki stockowe ze źródeł
 
@@ -292,7 +293,7 @@ Display w Polsce: **1–5 zł RPM** (AdSense), sieci zoptymalizowane 5–12 zł.
 | 7.1 | **Konsolidacja tagów w DB** (scalenie wariantów, 2618 → ~300) + ewentualna re-indeksacja top-50 lub zastąpienie hubami (§5.2) | Przed hubami tematycznymi |
 | 7.2 | **Paginacja ścieżkowa** `/kategoria/[slug]/strona/[nr]` (pełne ISR zamiast renderu per-request, prawdziwe 404 dla pustych stron zamiast 200+noindex) + 301 dla `?page=` | TTFB kategorii w CrUX > 800 ms albo wzrost ruchu na listach |
 | 7.3 | **Miniatury: preferencja ≥ 1200 px (`og:image:width`) + re-host do Storage** | Prace nad Discover (§5.3) |
-| 7.4 | ~~**Newsletter: double opt-in + unsubscribe**~~ ✅ 2026-10-28 przez MailerLite. Zostało: szkic kampanii tygodniowej przez API MailerLite (D2-A), mail powitalny | Decyzja D2 |
+| 7.4 | ~~**Newsletter: zapis + wypis**~~ ✅ 2026-10-28 przez MailerLite (bez double opt-in). Zostało: szkic kampanii tygodniowej przez API MailerLite (D2-A). **Weryfikacja botów** przy zapisie (Vercel BotID albo Cloudflare Turnstile) — bez double opt-in to jedyna bariera dla wpisywania cudzych adresów poza honeypotem i limitem 5/min/IP | Fałszywe zapisy, skargi na spam albo odbicia > 2% w raportach MailerLite |
 | 7.5 | **Rate limit na Upstash Redis** (obecny in-memory per instancja) | > 100 req/min na API albo anomalia w logach |
 | 7.6 | **Vercel Queues dla pipeline'u** | > 10 artykułów/dzień albo przerwane runy |
 | 7.7 | **DNS rebinding guard** (pinning resolvera w safe-fetch) | Prace nad scraperem; niskie ryzyko na Vercelu |

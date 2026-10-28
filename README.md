@@ -34,7 +34,7 @@ Budżet czasowy: `maxDuration=300`, guard przerywa pętlę po 270 s — nieprzet
 | CSS | Tailwind **4** | konfiguracja w `globals.css` — **bez** `tailwind.config.js` |
 | Komponenty | shadcn/ui na `@base-ui/react` | NIE klasyczny Radix |
 | Dane | Supabase (Postgres 17 + Storage), region **eu-west-3 (Paryż)** | anon key + RLS dla odczytów; service role tylko cron/admin |
-| Newsletter | **MailerLite** (API `connect.mailerlite.com`, double opt-in) | jedyne miejsce przechowywania listy; konfiguracja i szablon potwierdzenia w `emails/` |
+| Newsletter | **MailerLite** (API `connect.mailerlite.com`, zapis od razu aktywny) | jedyne miejsce przechowywania listy; konfiguracja i szablon wiadomości powitalnej w `emails/` |
 | Funkcje | Vercel, region **`cdg1` (Paryż)** — obok bazy | `vercel.json › regions`; Node 24, Fluid Compute |
 | LLM | OpenRouter | Claude Sonnet 5 (teksty), Gemini 2.5 Flash Image (miniatury) |
 | Testy | Vitest 4 + Testing Library + jsdom | 130 testów, CI na GitHub Actions |
@@ -69,7 +69,7 @@ curl -X POST -H "Authorization: Bearer $CRON_SECRET" \
    - URL-e miniatur normalizowane przy odczycie (`normalizeThumbnailUrl`: `&amp;` z historycznych rekordów); brak miniatury → `<ImageFallback>`,
    - `cache()` z React deduplikuje zapytania w obrębie requestu; **PostgREST tnie każdą odpowiedź do 1000 wierszy** — większe odczyty stronicuj `.range()` (wzór: `getSitemapArticles`).
 4. **Zapisy** — `src/lib/supabase/admin.ts::createAdminClient()` (service role, lazy singleton). Tylko: `/api/cron/generate` i Server Actions admina (te **autoryzują się same** przez `checkAdminAuth` — Server Action to globalny endpoint POST).
-5. **Newsletter** — `/api/newsletter` → `src/lib/newsletter/mailerlite.ts` → MailerLite `POST /api/subscribers` do grupy `MAILERLITE_GROUP_ID`. Double opt-in włącza ustawienie konta („Double opt-in for API and integrations"), nie pole `status` — inaczej ponowny zapis zdegradowałby aktywnego subskrybenta. Adresów nie trzymamy w Supabase (minimalizacja danych). Honeypot przeciw botom, identyczna odpowiedź dla nowego i istniejącego adresu. Konfiguracja panelu i szablon wiadomości: `emails/README.md`.
+5. **Newsletter** — `/api/newsletter` → `src/lib/newsletter/mailerlite.ts` → MailerLite `POST /api/subscribers` do grupy `MAILERLITE_GROUP_ID` ze `status: "active"` (bez double opt-in — decyzja właściciela) i IP zapisu jako dowodem zgody. Wiadomość „dziękujemy za zapis" wysyła automatyzacja MailerLite. Adresów nie trzymamy w Supabase (minimalizacja danych). Honeypot przeciw botom, identyczna odpowiedź dla nowego i istniejącego adresu. Konfiguracja panelu, DNS i szablon: `emails/README.md`.
 6. **Klient** — tylko komponenty interaktywne (`"use client"`). Spis treści jest komponentem serwerowym (nie dubluje markdownu w payloadzie RSC). Wspólne hooki: `useScrollY()` (jedna subskrypcja scrolla), `useArticleSearch()` (debounce + abort + błędy).
 
 ## 5. Baza danych

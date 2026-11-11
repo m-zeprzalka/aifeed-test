@@ -4,7 +4,7 @@
 >
 > **Produkcja:** [www.aifeed.pl](https://www.aifeed.pl) · **Stack:** Next.js 16.4 · React 19 · Tailwind 4 · Supabase · Claude API
 >
-> 📍 **Planowanie, decyzje i dalsze kroki:** [`ROADMAP.md`](./ROADMAP.md) — ten plik opisuje wyłącznie **stan obecny** (stan na 2026-11-11: ~1930 opublikowanych artykułów, 22 źródła RSS, 140 testów).
+> 📍 **Planowanie, decyzje i dalsze kroki:** [`ROADMAP.md`](./ROADMAP.md) — ten plik opisuje wyłącznie **stan obecny** (stan na 2026-11-11: ~1930 opublikowanych artykułów, 22 źródła RSS, 156 testów).
 
 ---
 
@@ -19,9 +19,11 @@ Pipeline (Vercel Cron, 3×/dzień: 05:00 / 11:00 / 17:00 UTC, `?count=3` = do 9 
 5. **Synteza źródeł** — `findRelatedItems` (≥3 wspólne tokeny tytułu, inny outlet) dokleja do promptu treść maks. 2 doniesień o tym samym wydarzeniu (information gain). Zmergowane URL-e są oznaczane jako przetworzone po insercie.
 6. **Generacja** — **Claude Opus 5.5** przez API Anthropic (`@anthropic-ai/sdk`, `src/lib/ai/claude.ts`; od 2026-11-11, wcześniej Sonnet 5 przez OpenRouter): streaming, adaptive thinking zawsze włączone, `effort: high`, `max_tokens: 16000`, serwerowy fallback przy odmowie klasyfikatora (`fallbacks: "default"`). Model zmienia env `CLAUDE_ARTICLE_MODEL` (np. `claude-sonnet-5-5`). Prompt systemowy budowany **per wywołanie** (aktualna data). Wynik `treść\n---META---\n{json}` → trzy strategie ekstrakcji meta → `normalizeMarkdown` → `sanitizeInternalLinks` → `polishTypography`. Kategoria sprowadzana do katalogu (fallback: kategoria feedu), czas czytania liczony z treści. Błędy przejściowe przed strumieniem ponawia SDK; zerwany strumień — 1 ponowienie w ramach budżetu czasu. Odmowa (`stop_reason: "refusal"`) = odmowa AI (źródło oznaczone jako przetworzone).
 7. **Bramka jakości** — `isLikelyRefusal` (tylko początek odpowiedzi) + scoring 0–100 (`src/lib/ai/quality.ts`), próg `QUALITY_PUBLISH_THRESHOLD = 50`; angielski tytuł zawsze spada pod próg. `is_featured` maks. 1/dzień przy score ≥ 80.
-8. **Miniatura** — og:image ze źródła (także grafiki stockowe i logo serwisów, np. arXiv — decyzja właściciela), walidacja HEAD przez `safeFetch` → gdy źródło nie ma obrazka (~4% artykułów): Gemini 2.5 Flash Image przez OpenRouter → upload do Supabase Storage; bez kredytów OpenRouter artykuł dostaje placeholder (publikacja nie jest blokowana).
+8. **Miniatura** — og:image ze źródła (także grafiki stockowe i logo serwisów, np. arXiv — decyzja właściciela), walidacja HEAD przez `safeFetch` → gdy źródło nie ma obrazka (~4% artykułów): **okładkę rysuje Claude** (`src/lib/images/claude-image.ts`) — narzędzie `code_execution`: Claude pisze i uruchamia skrypt Pillow + numpy, gotowy WebP 1600×900 pobieramy przez Files API (kontrola sygnatury i rozmiaru) → upload do Supabase Storage. Abstrakcyjno-koncepcyjna ilustracja bez tekstu, akcent koloru wg kategorii, ~30–40 s, ~0,10 $. Każdy błąd = markowy placeholder (publikacja nie jest blokowana).
 9. **Zapis** — INSERT artykułu → **natychmiast** jeden batch oznaczający źródła (główne + zmergowane) jako przetworzone → tagi (`selectTags`: katalog top-100 → istniejące w bazie → maks. 1 nowy; łącznie maks. 5; istniejące linkowane po id, nigdy nie przemianowywane). Kolejność zwęża okno duplikacji przy ścięciu funkcji.
 10. **IndexNow** — po runie jeden zbiorczy ping z nowymi URL-ami (Bing/Seznam/Yandex; fail-soft; `INDEXNOW_KEY`).
+
+**Uzupełnianie luki (backfill)** — `?backfill_from=RRRR-MM-DD&backfill_to=RRRR-MM-DD[&per_day=N]` (`src/lib/pipeline/backfill.ts`): bierze z feedów nieprzetworzone wiadomości z okna dat, wypełnia najpierw najuboższy dzień (do `per_day` łącznie, domyślnie 9) i publikuje z datą oryginalnej wiadomości (+15 min). Linki wewnętrzne i źródła syntezy tylko sprzed tej daty, bez wyróżnień; `updated_at` = chwila wstawienia. Działa, dopóki feedy trzymają wpisy z tego okresu. Użyte po przestoju 2026-11-01 → 11-11.
 
 Budżet czasowy: `maxDuration=300`, guard przerywa pętlę po 270 s — nieprzetworzone itemy wracają w następnym runie. Telemetria każdego etapu (w tym koszt liczony z tokenów `usage` Claude — `claudeCostUsd` — i czas generacji) → tabela `pipeline_events` → dashboard `/admin`.
 
@@ -36,8 +38,8 @@ Budżet czasowy: `maxDuration=300`, guard przerywa pętlę po 270 s — nieprzet
 | Dane | Supabase (Postgres 17 + Storage), region **eu-west-3 (Paryż)** | anon key + RLS dla odczytów; service role tylko cron/admin |
 | Newsletter | **MailerLite** (API `connect.mailerlite.com`, zapis od razu aktywny) | jedyne miejsce przechowywania listy; konfiguracja i szablon wiadomości powitalnej w `emails/` |
 | Funkcje | Vercel, region **`cdg1` (Paryż)** — obok bazy | `vercel.json › regions`; Node 24, Fluid Compute |
-| LLM | **Claude API** (Anthropic) · OpenRouter | Claude Opus 5.5 (teksty, ~$0,13/artykuł) · Gemini 2.5 Flash Image (miniatury, opcjonalnie) |
-| Testy | Vitest 4 + Testing Library + jsdom | 140 testów, CI na GitHub Actions |
+| LLM | **Claude API** (Anthropic) — jedyny dostawca AI | Claude Opus 5.5: teksty (~$0,13/artykuł) i okładki przez code execution (~$0,10, tylko gdy źródło nie ma obrazka) |
+| Testy | Vitest 4 + Testing Library + jsdom | 156 testów, CI na GitHub Actions |
 
 ## 3. Quick start
 
@@ -133,7 +135,7 @@ Redirecty EN→PL (308) w `next.config.ts`. Nowe route'y zawsze po polsku.
 
 ## 10. Testy
 
-Pliki obok kodu (`src/**/*.test.{ts,tsx}`, 140 testów). Kontrakt: zmieniasz obszar → rozszerzasz jego testy. Kluczowe: `safe-fetch` (SSRF), `internal-links` (whitelist linków), `typography` (ochrona URL-i), `parser` (synteza źródeł), `content` (ekstrakcja treści/og:image), `tags` (dyscyplina katalogu), `quality` (bramka jakości), `dates` (strefa czasowa), `html-entities`, `thumbnail-url`, `mailerlite` (zapis do grupy, mapowanie błędów, brak e-maili w logach).
+Pliki obok kodu (`src/**/*.test.{ts,tsx}`, 156 testów). Kontrakt: zmieniasz obszar → rozszerzasz jego testy. Kluczowe: `safe-fetch` (SSRF), `internal-links` (whitelist linków), `typography` (ochrona URL-i), `parser` (synteza źródeł), `content` (ekstrakcja treści/og:image), `tags` (dyscyplina katalogu), `quality` (bramka jakości), `dates` (strefa czasowa), `html-entities`, `thumbnail-url`, `mailerlite` (zapis do grupy, mapowanie błędów, brak e-maili w logach).
 
 ## 11. Deployment
 

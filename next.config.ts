@@ -25,7 +25,7 @@ function supabaseImagePattern(): { protocol: "https"; hostname: string; pathname
  * - `style-src 'unsafe-inline'`: Next/Image i Tailwind dokładają `style="..."`.
  * - `img-src https:`: miniatury scrape'owane z dowolnych domen RSS.
  * - `connect-src`: GA4 (+ doubleclick przy ads signals) i Vercel Analytics.
- *   Supabase i OpenRouter celowo pominięte — przeglądarka nie łączy się
+ *   Supabase i API Claude celowo pominięte — przeglądarka nie łączy się
  *   z nimi nigdy (dane idą przez RSC i /api/*, miniatury przez /_next/image).
  * - `frame-ancestors 'none'`: odpowiednik X-Frame-Options DENY (XFO zostaje
  *   dla starych przeglądarek).

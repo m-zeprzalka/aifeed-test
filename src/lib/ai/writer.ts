@@ -189,6 +189,11 @@ export interface GenerateArticleInput {
    * niego; bez tego 2 × 120 s + pauza potrafiły przebić limit 300 s.
    */
   deadline?: number;
+  /**
+   * „Dzisiejsza data" w prompcie systemowym — przy backfillu data publikacji
+   * artykułu (tekst z 3.11 pisany z perspektywy 3.11). Domyślnie teraz.
+   */
+  promptDate?: Date;
 }
 
 // Minimalny sensowny czas na wygenerowanie artykułu (thinking + ~1000 słów).
@@ -252,6 +257,7 @@ export async function generateArticle(input: GenerateArticleInput): Promise<Gene
     existingTags = [],
     internalLinkCandidates = [],
     deadline = Date.now() + 2 * REQUEST_TIMEOUT_MS,
+    promptDate,
   } = input;
 
   const client = claudeClient();
@@ -266,7 +272,7 @@ export async function generateArticle(input: GenerateArticleInput): Promise<Gene
     ...(supportsServerFallback(model)
       ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const }
       : {}),
-    system: buildArticleSystemPrompt(),
+    system: buildArticleSystemPrompt(promptDate),
     messages: [
       {
         role: "user",

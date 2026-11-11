@@ -1,10 +1,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 
 /**
- * Claude API (Anthropic, first-party) — generacja artykułów. Od 2026-11-11
- * zamiast OpenRouter (wyczerpane kredyty → 402 na każdym runie od 2026-11-01).
- * Miniatury AI zostają na OpenRouter (`openrouter.ts`) — Claude nie generuje
- * obrazów.
+ * Claude API (Anthropic, first-party) — generacja artykułów i okładek AI
+ * (`images/claude-image.ts`, code execution). Od 2026-11-11 zamiast OpenRouter
+ * (wyczerpane kredyty → 402 na każdym runie od 2026-11-01).
  *
  * Env: `ANTHROPIC_API_KEY` (wymagany), `CLAUDE_ARTICLE_MODEL` (opcjonalny —
  * zmiana modelu bez zmiany kodu, np. `claude-sonnet-5-5` przy cięciu kosztów).

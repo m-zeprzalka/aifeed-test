@@ -2,7 +2,7 @@
 
 > **Status:** wersja 3.1 · 2026-11-11
 > **Stan serwisu:** ~1930 opublikowanych artykułów · 2618 tagów · pipeline 3×3/dzień na **Claude Opus 5.5 (API Anthropic)** · 22 źródła RSS · ruch rośnie · **przestój 2026-11-01 → 11-11** (wyczerpane kredyty OpenRouter, §9)
-> **Stan kodu:** po audycie i refaktoryzacji 2026-10-28 (§1) — Next 16.4.3, 0 podatności produkcyjnych, 140 testów, CI · baza: migracje 001 → 007 wgrane
+> **Stan kodu:** po audycie i refaktoryzacji 2026-10-28 (§1) — Next 16.4.3, 0 podatności produkcyjnych, 156 testów, CI · baza: migracje 001 → 007 wgrane
 
 To jest **kanoniczny dokument planowania**. `README.md` opisuje stan obecny (architektura, uruchomienie), ten plik — co zrobić, w jakiej kolejności i dlaczego. Punkty oznaczone **[DECYZJA]** czekają na Twoją decyzję; przy każdym jest rekomendacja.
 
@@ -25,7 +25,7 @@ To jest **kanoniczny dokument planowania**. `README.md` opisuje stan obecny (arc
 
 ## 0. Do zrobienia teraz
 
-Kolejność ma znaczenie. 0.1–0.4 wykonane 2026-10-28 (w 0.4 zostaje kontrola raportu „Strony" za kilka dni); 0.7–0.8 doszły po przestoju pipeline'u 2026-11-01 → 11-11. Reszta to praca ręczna w panelach, ~30 minut (0.7 to mała zmiana w kodzie).
+Kolejność ma znaczenie. 0.1–0.4 wykonane 2026-10-28 (w 0.4 zostaje kontrola raportu „Strony" za kilka dni); 0.7 (i zamknięte 0.8) doszły po przestoju pipeline'u 2026-11-01 → 11-11. Reszta to praca ręczna w panelach, ~30 minut (0.7 to mała zmiana w kodzie).
 
 | # | Co | Dlaczego to P0 |
 |---|---|---|
@@ -38,7 +38,7 @@ Kolejność ma znaczenie. 0.1–0.4 wykonane 2026-10-28 (w 0.4 zostaje kontrola 
 | 0.5 | **[DECYZJA] Zgody na cookies (D1)** — przeczytaj §3 | GA4 działa dziś bez zgody użytkownika; to ryzyko prawne (PKE) i twardy wymóg przed jakąkolwiek reklamą |
 | 0.6 | Rotacja kluczy `SUPABASE_SERVICE_ROLE_KEY` i `OPENROUTER_API_KEY`, **jeśli** nie zrobiłeś tego po wycieku z maja. Dodatkowo **token MailerLite** (był wklejony w rozmowie z asystentem): MailerLite → Integrations → API → nowy token → Vercel `MAILERLITE_API_TOKEN` → redeploy → usuń stary | Jedyny niezamknięty punkt P0 ze starego audytu |
 | 0.7 | **Alert o martwym pipelinie** — przestój 01.11–11.11 (402 z OpenRouter na każdym runie) wyszedł na jaw dopiero po 10 dniach. Rekomendacja: darmowy monitor heartbeat (np. Healthchecks.io / Better Stack) — pipeline pinguje URL z env po runie z ≥1 opublikowanym artykułem; brak pingu przez 24 h = e-mail. ~20 linii kodu + 1 zmienna env. Trigger 7.13 („Vercel Pro") jest już spełniony | Każdy dzień przestoju to ~9 niewydanych artykułów i utrata świeżości w Google News/Discover |
-| 0.8 | **Limit wydatków Claude API** — Claude Console → Settings → Limits: miesięczny limit (np. 100 $) + alert e-mail przy ~70%. Realny koszt: ~0,13 $/artykuł ≈ 35 $/mies. przy 9/dzień (D5) | Pętla błędów albo zmiana wolumenu nie przepali budżetu po cichu; przy wyczerpaniu limitu pipeline staje — dlatego razem z 0.7 |
+| 0.8 | ✅ ~~**Limit wydatków Claude API**~~ — niepotrzebny: właściciel sam na bieżąco monitoruje zużycie i limity w Claude Console (decyzja 2026-11-11). Realny koszt: ~0,13 $/artykuł ≈ 35 $/mies. przy 9/dzień (D5) | — |
 
 ---
 
@@ -156,7 +156,7 @@ Do decyzji: **co i jak często wysyłamy.**
 
 ✅ **Decyzja właściciela (2026-10-28): zostają.** Pipeline bierze og:image ze źródła także wtedy, gdy to logo serwisu (arXiv — dziś 211 artykułów) albo stockowa grafika używana przez źródło wielokrotnie. AI generuje miniaturę tylko, gdy źródło nie ma żadnego obrazka (~5% artykułów).
 
-Opcja na przyszłość (gdy Discover stanie się priorytetem): zastępować **wyłącznie logo arXiv** miniaturą AI. Koszt: ~1,2 artykułu z arXiv dziennie × ~$0,04 (Gemini 2.5 Flash Image) ≈ **$1,5/mies.**; jednorazowo dla 211 istniejących ≈ $8–9. Zmiana to kilka linijek w `generator.ts`. Realny koszt obrazka zobaczysz w `/admin` po pierwszym tygodniu (logowanie kosztów naprawione).
+Opcja na przyszłość (gdy Discover stanie się priorytetem): zastępować **wyłącznie logo arXiv** miniaturą AI. Koszt: ~1,2 artykułu z arXiv dziennie × ~$0,10 (okładka Claude, code execution — od 2026-11-11 zamiast Gemini) ≈ **$3,6/mies.**; jednorazowo dla 211 istniejących ≈ $8–9. Zmiana to kilka linijek w `generator.ts`. Realny koszt obrazka zobaczysz w `/admin` po pierwszym tygodniu (logowanie kosztów naprawione).
 
 ### D4. Przegląd wsteczny najsłabszych tekstów
 
@@ -327,7 +327,7 @@ Display w Polsce: **1–5 zł RPM** (AdSense), sieci zoptymalizowane 5–12 zł.
 - Teksty autorskie (cel ≥ 4/mies.)
 - Pipeline: success rate > 85%, synteza wielu źródeł > 15% (po §5.1), koszt/dzień (z `/admin`)
 
-**Finanse (miesięcznie):** przychód wg źródła; próg #1: przychód > koszty (OpenRouter + Vercel Pro + Supabase); kamień milowy: 1000 zł/mies.
+**Finanse (miesięcznie):** przychód wg źródła; próg #1: przychód > koszty (API Claude + Vercel Pro + Supabase); kamień milowy: 1000 zł/mies.
 
 ---
 
@@ -339,7 +339,7 @@ Szczegóły w `git log`. Najważniejsze etapy:
 - **2026-08-11 — SEO i jakość:** linkowanie wewnętrzne z whitelistą slugów, `news-sitemap.xml`, IndexNow, Preferred Sources, `/o-serwisie` jako strona transparentności, `/redakcja` (nazwisko firmuje serwis, nie artykuły), model **Claude Sonnet 5**, prompt 700–1200 słów z „Co to oznacza dla Polski", synteza wielu źródeł, tagi 3-stopniowe, wolumen 3×3/dzień, home „najnowsze na górze".
 - **2026-08-12 — UX/brand:** favicon i ikony z glifów logo (light/dark), paginacja tagów, aktywny pill kategorii po hydratacji, fallback `popular_tags` stronicowany.
 - **2026-10-28 — audyt i refaktoryzacja** (§1).
-- **2026-11-01 → 11-11 — przestój pipeline'u:** od runu 2026-11-01 17:00 UTC każde wywołanie OpenRouter kończyło się `402` (brak kredytów) — 0 artykułów przez 10 dni, nikt nie dostał alertu (→ 0.7). **2026-11-11:** artykuły przepięte na API Claude (`@anthropic-ai/sdk`, Claude Opus 5.5, D5); OpenRouter zostaje tylko dla miniatur AI.
+- **2026-11-01 → 11-11 — przestój pipeline'u:** od runu 2026-11-01 17:00 UTC każde wywołanie OpenRouter kończyło się `402` (brak kredytów) — 0 artykułów przez 10 dni, nikt nie dostał alertu (→ 0.7). **2026-11-11:** artykuły przepięte na API Claude (`@anthropic-ai/sdk`, Claude Opus 5.5, D5); Tego samego dnia: okładki AI rysuje Claude (code execution, zamiast Gemini — OpenRouter usunięty z kodu), a luka 2–10.11 uzupełniona trybem backfill z datami oryginalnych wiadomości (decyzja właściciela; weekend 7–8.11 bez materiału w feedach).
 
 ---
 

@@ -3,6 +3,14 @@ import { scrapeAllFeeds, selectTopArticles, findRelatedItems, type ScrapedArticl
 import { scrapeSourcePage } from "@/lib/scraper/content";
 import { generateArticle } from "@/lib/ai/writer";
 import { ArticleRefusalError } from "@/lib/ai/claude";
+import {
+  backfillPublishedAt,
+  linkCandidatesFor,
+  parseBackfillWindow,
+  selectBackfillItems,
+  warsawDay,
+  type LinkPoolEntry,
+} from "@/lib/pipeline/backfill";
 import { assessArticleQuality, countWords, isLikelyRefusal, QUALITY_PUBLISH_THRESHOLD } from "@/lib/ai/quality";
 import { normalizeTagCandidates, selectTags, tagSlug } from "@/lib/ai/tags";
 import { getArticleThumbnail } from "@/lib/images/generator";
@@ -139,6 +147,15 @@ async function runPipeline(request: NextRequest) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // Tryb uzupełniania luki (lib/pipeline/backfill.ts) — zły parametr = 400
+  // przed jakąkolwiek pracą.
+  const url = new URL(request.url);
+  const backfillParse = parseBackfillWindow(url.searchParams);
+  if (!backfillParse.ok) {
+    return Response.json({ error: backfillParse.error }, { status: 400 });
+  }
+  const backfill = backfillParse.window;
+
   const runStartedAt = Date.now();
   const runId = newRunId();
 
@@ -182,9 +199,31 @@ async function runPipeline(request: NextRequest) {
     console.log(`${newItems.length} new items after deduplication`);
 
     // Step 3: Select top articles (configurable via ?count=N ∈ [1,15], default 4)
-    const url = new URL(request.url);
     const count = Math.min(Math.max(parseInt(url.searchParams.get("count") || "4", 10) || 4, 1), 15);
-    const topItems = selectTopArticles(newItems, count);
+    let topItems: ScrapedArticle[];
+    if (backfill) {
+      // Ile artykułów już ma każdy dzień okna — luka wypełnia się do
+      // `perDay` łącznie. Zakres z zapasem ±1-2 dni (strefa Warszawy),
+      // dzień liczony w JS. Błąd zapytania = STOP (nadpisalibyśmy limit).
+      const { data: dayRows, error: dayError } = await supabase
+        .from("articles")
+        .select("published_at")
+        .eq("is_published", true)
+        .gte("published_at", new Date(Date.parse(`${backfill.from}T00:00:00Z`) - 86_400_000).toISOString())
+        .lt("published_at", new Date(Date.parse(`${backfill.to}T00:00:00Z`) + 2 * 86_400_000).toISOString());
+      if (dayError) {
+        return Response.json({ error: "Backfill day count failed", details: dayError.message, run_id: runId }, { status: 500 });
+      }
+      const existingPerDay = new Map<string, number>();
+      for (const row of dayRows ?? []) {
+        if (!row.published_at) continue;
+        const day = warsawDay(new Date(row.published_at));
+        existingPerDay.set(day, (existingPerDay.get(day) ?? 0) + 1);
+      }
+      topItems = selectBackfillItems(newItems, backfill, existingPerDay, count);
+    } else {
+      topItems = selectTopArticles(newItems, count);
+    }
 
     // Telemetria: zapis startu — dashboard /admin grupuje eventy po `run_id`.
     await logPipelineEvent(runId, "run_start", {
@@ -192,6 +231,7 @@ async function runPipeline(request: NextRequest) {
       scraped_total: scrapedItems.length,
       new_after_dedup: newItems.length,
       to_process: topItems.length,
+      ...(backfill && { backfill }),
     });
 
     if (newItems.length === 0) {
@@ -230,15 +270,19 @@ async function runPipeline(request: NextRequest) {
     // tej listy; `sanitizeInternalLinks` w writer.ts usuwa wszystko spoza niej
     // (zero halucynowanych 404). Artykuły opublikowane w TYM runie dopisujemy
     // do listy na bieżąco — teksty z jednego cyklu newsowego często się łączą.
+    // Backfill: większa pula, bo kandydatami są tylko artykuły STARSZE niż
+    // tworzony (`linkCandidatesFor`) — bez linków „w przyszłość".
     const { data: recentArticleRows } = await supabase
       .from("articles")
-      .select("title, slug")
+      .select("title, slug, published_at")
       .eq("is_published", true)
       .order("published_at", { ascending: false })
-      .limit(40);
-    const internalLinkCandidates: { title: string; slug: string }[] = (
-      recentArticleRows || []
-    ).filter((r): r is { title: string; slug: string } => Boolean(r.title && r.slug));
+      .limit(backfill ? 400 : 40);
+    const linkPool: LinkPoolEntry[] = (recentArticleRows || [])
+      .filter((r): r is { title: string; slug: string; published_at: string } =>
+        Boolean(r.title && r.slug && r.published_at)
+      )
+      .map((r) => ({ title: r.title, slug: r.slug, publishedAt: r.published_at }));
 
     const deadline = runStartedAt + AI_DEADLINE_MS;
 
@@ -259,7 +303,8 @@ async function runPipeline(request: NextRequest) {
       .select("id", { count: "exact", head: true })
       .eq("is_featured", true)
       .gte("published_at", startOfTodayUtc.toISOString());
-    let canFeatureThisRun = (featuredToday || 0) === 0;
+    // Backfill nigdy nie wyróżnia — featured to decyzja „dnia dzisiejszego".
+    let canFeatureThisRun = !backfill && (featuredToday || 0) === 0;
 
     for (let i = 0; i < topItems.length; i++) {
       // Time-budget guard — patrz komentarz przy PIPELINE_BUDGET_MS. Items
@@ -276,8 +321,10 @@ async function runPipeline(request: NextRequest) {
       }
 
       const item = topItems[i];
+      // Backfill: data oryginalnej wiadomości (+15 min) — zob. backfill.ts.
+      const backdatedAt = backfill ? backfillPublishedAt(item.publishedAt) : null;
       try {
-        console.log(`Generating article for: ${item.title}`);
+        console.log(`Generating article for: ${item.title}${backdatedAt ? ` (backfill → ${backdatedAt.toISOString()})` : ""}`);
 
         // JEDNO pobranie strony źródłowej: treść dla AI + og:image/og:site_name
         // dla miniatury (wcześniej dwa osobne żądania do tej samej strony).
@@ -313,9 +360,13 @@ async function runPipeline(request: NextRequest) {
         const mergedItems: ScrapedArticle[] = [];
         let combinedContent = sourceContent;
 
+        // Backfill: tylko źródła opublikowane przed datą artykułu — tekst
+        // z 3.11 nie może cytować doniesienia z 9.11.
         const relatedCandidates = findRelatedItems(
           item,
-          newItems.filter((n) => !usedSourceUrls.has(n.url)),
+          newItems.filter(
+            (n) => !usedSourceUrls.has(n.url) && (!backdatedAt || n.publishedAt.getTime() <= backdatedAt.getTime())
+          ),
           2
         );
         for (const rel of relatedCandidates) {
@@ -343,8 +394,9 @@ async function runPipeline(request: NextRequest) {
           fallbackCategory,
           runId,
           existingTags,
-          internalLinkCandidates,
+          internalLinkCandidates: linkCandidatesFor(linkPool, backdatedAt),
           deadline,
+          promptDate: backdatedAt ?? undefined,
         });
 
         // Validate AI response — reject refusals and garbage
@@ -382,7 +434,7 @@ async function runPipeline(request: NextRequest) {
         const thumbnail = await getArticleThumbnail(
           article.title,
           { sourceUrl: item.url, ogImage: sourcePage.ogImage, siteName: sourcePage.siteName },
-          { runId, deadline }
+          { runId, deadline, category: isCategorySlug(article.category) ? article.category : undefined }
         );
 
         const slug = await buildUniqueSlug(supabase, article.title);
@@ -409,7 +461,7 @@ async function runPipeline(request: NextRequest) {
             reading_time: article.reading_time,
             is_featured: shouldFeature,
             is_published: true,
-            published_at: new Date().toISOString(),
+            published_at: (backdatedAt ?? new Date()).toISOString(),
           })
           .select("id")
           .single();
@@ -442,7 +494,7 @@ async function runPipeline(request: NextRequest) {
         publishedUrls.push(`${siteConfig.url}/artykul/${slug}`);
         // Świeżo opublikowany artykuł staje się kandydatem do linkowania dla
         // kolejnych items w tym samym runie (ten sam cykl newsowy).
-        internalLinkCandidates.unshift({ title: article.title, slug });
+        linkPool.push({ title: article.title, slug, publishedAt: (backdatedAt ?? new Date()).toISOString() });
         console.log(`Generated: ${article.title}`);
         await logPipelineEvent(runId, "article_generated", {
           title: article.title,
@@ -500,6 +552,7 @@ async function runPipeline(request: NextRequest) {
     });
     return Response.json({
       message: `Generated ${generated.length} articles${aborted.length > 0 ? ` (${aborted.length} aborted)` : ""}`,
+      ...(backfill && { backfill }),
       run_id: runId,
       generated,
       rejected,

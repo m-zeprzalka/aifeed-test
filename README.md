@@ -2,9 +2,9 @@
 
 > Polskojęzyczny, w pełni zautomatyzowany magazyn informacyjny o sztucznej inteligencji.
 >
-> **Produkcja:** [www.aifeed.pl](https://www.aifeed.pl) · **Stack:** Next.js 16.4 · React 19 · Tailwind 4 · Supabase · OpenRouter
+> **Produkcja:** [www.aifeed.pl](https://www.aifeed.pl) · **Stack:** Next.js 16.4 · React 19 · Tailwind 4 · Supabase · Claude API
 >
-> 📍 **Planowanie, decyzje i dalsze kroki:** [`ROADMAP.md`](./ROADMAP.md) — ten plik opisuje wyłącznie **stan obecny** (stan na 2026-10-28: ~1900 opublikowanych artykułów, 22 źródła RSS, 130 testów).
+> 📍 **Planowanie, decyzje i dalsze kroki:** [`ROADMAP.md`](./ROADMAP.md) — ten plik opisuje wyłącznie **stan obecny** (stan na 2026-11-11: ~1930 opublikowanych artykułów, 22 źródła RSS, 140 testów).
 
 ---
 
@@ -17,13 +17,13 @@ Pipeline (Vercel Cron, 3×/dzień: 05:00 / 11:00 / 17:00 UTC, `?count=3` = do 9 
 3. **Selekcja** — scoring świeżość − kara za monokulturę źródła (`selectTopArticles`).
 4. **Źródło — jeden fetch** — `scrapeSourcePage` (przez `safeFetch`, hardening SSRF — §7) zwraca naraz: tekst artykułu (do 12 tys. znaków), og:image i og:site_name; przy porażce podaje przyczynę (`http-403`, `too-short:…`) do telemetrii.
 5. **Synteza źródeł** — `findRelatedItems` (≥3 wspólne tokeny tytułu, inny outlet) dokleja do promptu treść maks. 2 doniesień o tym samym wydarzeniu (information gain). Zmergowane URL-e są oznaczane jako przetworzone po insercie.
-6. **Generacja** — `anthropic/claude-sonnet-5` przez OpenRouter (adaptive thinking; `max_tokens: 12000`), prompt systemowy budowany **per wywołanie** (aktualna data). Wynik `treść\n---META---\n{json}` → trzy strategie ekstrakcji meta → `normalizeMarkdown` → `sanitizeInternalLinks` → `polishTypography`. Kategoria sprowadzana do katalogu (fallback: kategoria feedu), czas czytania liczony z treści. Retry ×1 na 429/5xx i zerwany strumień odpowiedzi.
+6. **Generacja** — **Claude Opus 5.5** przez API Anthropic (`@anthropic-ai/sdk`, `src/lib/ai/claude.ts`; od 2026-11-11, wcześniej Sonnet 5 przez OpenRouter): streaming, adaptive thinking zawsze włączone, `effort: high`, `max_tokens: 16000`, serwerowy fallback przy odmowie klasyfikatora (`fallbacks: "default"`). Model zmienia env `CLAUDE_ARTICLE_MODEL` (np. `claude-sonnet-5-5`). Prompt systemowy budowany **per wywołanie** (aktualna data). Wynik `treść\n---META---\n{json}` → trzy strategie ekstrakcji meta → `normalizeMarkdown` → `sanitizeInternalLinks` → `polishTypography`. Kategoria sprowadzana do katalogu (fallback: kategoria feedu), czas czytania liczony z treści. Błędy przejściowe przed strumieniem ponawia SDK; zerwany strumień — 1 ponowienie w ramach budżetu czasu. Odmowa (`stop_reason: "refusal"`) = odmowa AI (źródło oznaczone jako przetworzone).
 7. **Bramka jakości** — `isLikelyRefusal` (tylko początek odpowiedzi) + scoring 0–100 (`src/lib/ai/quality.ts`), próg `QUALITY_PUBLISH_THRESHOLD = 50`; angielski tytuł zawsze spada pod próg. `is_featured` maks. 1/dzień przy score ≥ 80.
-8. **Miniatura** — og:image ze źródła (także grafiki stockowe i logo serwisów, np. arXiv — decyzja właściciela), walidacja HEAD przez `safeFetch` → gdy źródło nie ma obrazka: Gemini 2.5 Flash Image → upload do Supabase Storage.
+8. **Miniatura** — og:image ze źródła (także grafiki stockowe i logo serwisów, np. arXiv — decyzja właściciela), walidacja HEAD przez `safeFetch` → gdy źródło nie ma obrazka (~4% artykułów): Gemini 2.5 Flash Image przez OpenRouter → upload do Supabase Storage; bez kredytów OpenRouter artykuł dostaje placeholder (publikacja nie jest blokowana).
 9. **Zapis** — INSERT artykułu → **natychmiast** jeden batch oznaczający źródła (główne + zmergowane) jako przetworzone → tagi (`selectTags`: katalog top-100 → istniejące w bazie → maks. 1 nowy; łącznie maks. 5; istniejące linkowane po id, nigdy nie przemianowywane). Kolejność zwęża okno duplikacji przy ścięciu funkcji.
 10. **IndexNow** — po runie jeden zbiorczy ping z nowymi URL-ami (Bing/Seznam/Yandex; fail-soft; `INDEXNOW_KEY`).
 
-Budżet czasowy: `maxDuration=300`, guard przerywa pętlę po 270 s — nieprzetworzone itemy wracają w następnym runie. Telemetria każdego etapu (w tym koszt z `usage.cost` OpenRouter) → tabela `pipeline_events` → dashboard `/admin`.
+Budżet czasowy: `maxDuration=300`, guard przerywa pętlę po 270 s — nieprzetworzone itemy wracają w następnym runie. Telemetria każdego etapu (w tym koszt liczony z tokenów `usage` Claude — `claudeCostUsd` — i czas generacji) → tabela `pipeline_events` → dashboard `/admin`.
 
 ## 2. Stack
 
@@ -36,8 +36,8 @@ Budżet czasowy: `maxDuration=300`, guard przerywa pętlę po 270 s — nieprzet
 | Dane | Supabase (Postgres 17 + Storage), region **eu-west-3 (Paryż)** | anon key + RLS dla odczytów; service role tylko cron/admin |
 | Newsletter | **MailerLite** (API `connect.mailerlite.com`, zapis od razu aktywny) | jedyne miejsce przechowywania listy; konfiguracja i szablon wiadomości powitalnej w `emails/` |
 | Funkcje | Vercel, region **`cdg1` (Paryż)** — obok bazy | `vercel.json › regions`; Node 24, Fluid Compute |
-| LLM | OpenRouter | Claude Sonnet 5 (teksty), Gemini 2.5 Flash Image (miniatury) |
-| Testy | Vitest 4 + Testing Library + jsdom | 130 testów, CI na GitHub Actions |
+| LLM | **Claude API** (Anthropic) · OpenRouter | Claude Opus 5.5 (teksty, ~$0,13/artykuł) · Gemini 2.5 Flash Image (miniatury, opcjonalnie) |
+| Testy | Vitest 4 + Testing Library + jsdom | 140 testów, CI na GitHub Actions |
 
 ## 3. Quick start
 
@@ -133,7 +133,7 @@ Redirecty EN→PL (308) w `next.config.ts`. Nowe route'y zawsze po polsku.
 
 ## 10. Testy
 
-Pliki obok kodu (`src/**/*.test.{ts,tsx}`, 131 testów). Kontrakt: zmieniasz obszar → rozszerzasz jego testy. Kluczowe: `safe-fetch` (SSRF), `internal-links` (whitelist linków), `typography` (ochrona URL-i), `parser` (synteza źródeł), `content` (ekstrakcja treści/og:image), `tags` (dyscyplina katalogu), `quality` (bramka jakości), `dates` (strefa czasowa), `html-entities`, `thumbnail-url`, `mailerlite` (zapis do grupy, mapowanie błędów, brak e-maili w logach).
+Pliki obok kodu (`src/**/*.test.{ts,tsx}`, 140 testów). Kontrakt: zmieniasz obszar → rozszerzasz jego testy. Kluczowe: `safe-fetch` (SSRF), `internal-links` (whitelist linków), `typography` (ochrona URL-i), `parser` (synteza źródeł), `content` (ekstrakcja treści/og:image), `tags` (dyscyplina katalogu), `quality` (bramka jakości), `dates` (strefa czasowa), `html-entities`, `thumbnail-url`, `mailerlite` (zapis do grupy, mapowanie błędów, brak e-maili w logach).
 
 ## 11. Deployment
 

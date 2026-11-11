@@ -30,7 +30,7 @@ export type PipelineEvent =
   | "article_generated"    // sukces — wstawiono do DB
   | "article_failed"       // wyjątek na dowolnym etapie
   // Cost tracking
-  | "ai_cost";             // OpenRouter usage report (article OR image)
+  | "ai_cost";             // koszt AI: artykuł (Claude API) albo miniatura (OpenRouter)
 
 /**
  * Generuje unikalne run_id sortowalne czasowo. Format: `${unix_ms}-${hex8}`.

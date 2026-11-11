@@ -1,6 +1,11 @@
 import { siteConfig } from "@/config/site";
 
-/** Wspólne dla generatora artykułów (writer.ts) i miniatur (images/generator.ts). */
+/**
+ * OpenRouter — od 2026-11-11 WYŁĄCZNIE miniatury AI (images/generator.ts,
+ * Gemini 2.5 Flash Image), gdy źródło nie ma og:image. Artykuły piszemy przez
+ * API Claude (`claude.ts`). Brak klucza albo kredytów = artykuł bez miniatury
+ * (placeholder w UI) — nigdy nie blokuje publikacji.
+ */
 export const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 export function openRouterHeaders(apiKey: string): Record<string, string> {

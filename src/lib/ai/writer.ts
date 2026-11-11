@@ -1,6 +1,15 @@
 import { buildArticleSystemPrompt, ARTICLE_USER_PROMPT } from "./prompts";
 import { sanitizeInternalLinks } from "./internal-links";
-import { OPENROUTER_API_URL, openRouterCostUsd, openRouterHeaders, type OpenRouterUsage } from "./openrouter";
+import Anthropic from "@anthropic-ai/sdk";
+import type { BetaMessageStreamParams } from "@anthropic-ai/sdk/resources/beta/messages";
+import {
+  ArticleRefusalError,
+  articleModel,
+  claudeClient,
+  claudeCostUsd,
+  responseText as extractResponseText,
+  supportsServerFallback,
+} from "./claude";
 import { countWords } from "./quality";
 import { polishTypography } from "../typography";
 import { stripInlineMarkdown } from "../heading-id";
@@ -8,12 +17,16 @@ import { logPipelineEvent } from "@/lib/telemetry";
 import { siteConfig, type CategorySlug } from "@/config/site";
 import { tagSlug } from "./tags";
 
-// Sonnet 5 (2026): jakość pisania klasy dawnego Opusa przy cenie NIŻSZEJ niż
-// stary Sonnet 4 ($2/$10 vs $3/$15 za MTok na OpenRouter). Adaptive thinking
-// jest domyślnie WŁĄCZONE — nie wysyłamy parametru `thinking`; max_tokens
-// musi mieścić thinking + treść (stąd 12k, nie 4k). Sonnet 4 jest deprecated
-// (first-party retirement 06.2026) — nie wracać.
-const ARTICLE_MODEL = "anthropic/claude-sonnet-5";
+// Model: Claude Opus 5.5 przez API Anthropic (claude.ts; zmiana przez env
+// `CLAUDE_ARTICLE_MODEL`). Thinking jest zawsze włączone (adaptive) — NIE
+// wysyłamy parametru `thinking` (`disabled` = 400); głębię ustawia `effort`.
+// max_tokens mieści thinking + treść: artykuł to ~3,5k tokenów (maks. 7k
+// w 30 dniach na Sonnet 5), 16k to zapas, a nie cel.
+const ARTICLE_MAX_TOKENS = 16_000;
+// Domyślny effort Opus 5.5 to `medium` — ustawiamy jawnie. `high`: wierna
+// adaptacja z zakazem halucynacji to praca wrażliwa na jakość, a adaptive
+// thinking i tak myśli krótko przy prostych źródłach.
+const ARTICLE_EFFORT = "high" as const;
 
 /**
  * Repair common markdown formatting failures from the LLM before storage.
@@ -161,7 +174,7 @@ export interface GenerateArticleInput {
   sourceContent: string;
   /** Kategoria feedu RSS — fallback, gdy AI zwróci slug spoza katalogu. */
   fallbackCategory: CategorySlug;
-  /** Gdy przekazany, koszt OpenRouter trafia do `pipeline_events` (`ai_cost`). */
+  /** Gdy przekazany, koszt wywołania Claude trafia do `pipeline_events` (`ai_cost`). */
   runId?: string;
   /** Katalog istniejących tagów (dyscyplina słownika — zob. prompts.ts). */
   existingTags?: string[];
@@ -179,8 +192,9 @@ export interface GenerateArticleInput {
 }
 
 // Minimalny sensowny czas na wygenerowanie artykułu (thinking + ~1000 słów).
-const MIN_GENERATION_MS = 45_000;
-const REQUEST_TIMEOUT_MS = 120_000;
+// Poniżej nie zaczynamy płatnego wywołania — ucięte w połowie nic nie daje.
+const MIN_GENERATION_MS = 60_000;
+const REQUEST_TIMEOUT_MS = 150_000;
 
 // Polski tekst publicystyczny czyta się w tempie ~200 słów/min. Liczone
 // z treści, nie z szacunku AI — model zgadywał czas czytania niespójnie.
@@ -211,6 +225,22 @@ function fallbackExcerpt(content: string): string {
   return plain.length > 200 ? `${plain.slice(0, 199).trimEnd()}…` : plain;
 }
 
+/** Błąd, którego ponowienie dałoby ten sam wynik (np. ucięcie na max_tokens). */
+class NonRetryableError extends Error {}
+
+/**
+ * Czy warto ponowić wywołanie w ramach tego samego runu: zerwany strumień,
+ * timeout, sieć, 408/409/429/5xx (w tym 529 overloaded). Odmowa, ucięcie
+ * i pozostałe 4xx (zły klucz, brak środków, za długi prompt) — nie.
+ */
+export function isRetryable(error: unknown): boolean {
+  if (error instanceof ArticleRefusalError || error instanceof NonRetryableError) return false;
+  if (error instanceof Anthropic.APIError && typeof error.status === "number") {
+    return error.status >= 500 || error.status === 408 || error.status === 409 || error.status === 429;
+  }
+  return true;
+}
+
 export async function generateArticle(input: GenerateArticleInput): Promise<GeneratedArticle> {
   const {
     topic,
@@ -224,97 +254,93 @@ export async function generateArticle(input: GenerateArticleInput): Promise<Gene
     deadline = Date.now() + 2 * REQUEST_TIMEOUT_MS,
   } = input;
 
-  const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey) {
-    throw new Error("OPENROUTER_API_KEY is not set");
-  }
+  const client = claudeClient();
+  const model = articleModel();
 
-  const requestBody = JSON.stringify({
-    model: ARTICLE_MODEL,
-    // Thinking (domyślnie aktywne na Sonnet 5) liczy się do max_tokens razem
-    // z treścią — 12k daje zapas na ~1200 słów artykułu + rozumowanie.
-    max_tokens: 12000,
-    // Usage Accounting: koszt w `usage.cost` (zob. openrouter.ts).
-    usage: { include: true },
+  const params: BetaMessageStreamParams = {
+    model,
+    max_tokens: ARTICLE_MAX_TOKENS,
+    output_config: { effort: ARTICLE_EFFORT },
+    // Serwerowy fallback przy odmowie klasyfikatora (np. tekst o cyberataku
+    // na model) — zob. claude.ts. Routing po kategorii odmowy, bez listy modeli.
+    ...(supportsServerFallback(model)
+      ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const }
+      : {}),
+    system: buildArticleSystemPrompt(),
     messages: [
-      {
-        role: "system",
-        content: buildArticleSystemPrompt(),
-      },
       {
         role: "user",
         content: ARTICLE_USER_PROMPT(topic, sourceUrls, sourceDescriptions, sourceContent, existingTags, internalLinkCandidates),
       },
     ],
-  });
+  };
 
-  // Jedna próba ponowienia przy błędach przejściowych (429/5xx/timeout,
-  // zerwany strumień odpowiedzi, 200 bez treści). Odczyt body jest W pętli:
-  // telemetria pokazała `TypeError: terminated` — połączenie padające
-  // w trakcie czytania JSON-a, którego dawny retry (tylko wokół fetch) nie
-  // łapał. Retry tylko, gdy do `deadline` zostało dość czasu; wyjątek wraca
-  // do pipeline'u, który NIE oznacza źródła jako przetworzonego (retry
-  // w następnym cronie).
-  type ChatResponse = { choices?: { message?: { content?: string } }[]; usage?: OpenRouterUsage };
-  let data: ChatResponse | null = null;
+  // Streaming: długa odpowiedź (thinking + ~1000 słów) bez ryzyka timeoutu
+  // bezczynnego połączenia. Błędy przejściowe PRZED strumieniem (429/5xx/
+  // sieć) ponawia SDK (`maxRetries` w claude.ts); zerwany strumień w trakcie
+  // (np. `terminated`) — jedna próba tutaj, jeśli do `deadline` zostało dość
+  // czasu. Wyjątek wraca do pipeline'u, który NIE oznacza źródła jako
+  // przetworzonego (retry w następnym cronie).
+  let message: Anthropic.Beta.BetaMessage | null = null;
   let responseText = "";
+  let durationMs = 0;
   for (let attempt = 0; attempt < 2; attempt++) {
     const remaining = deadline - Date.now();
     if (remaining < MIN_GENERATION_MS) {
       throw new Error(`Za mało czasu na generację (${Math.round(remaining / 1000)} s do końca budżetu)`);
     }
     const isLastAttempt = attempt === 1 || remaining - REQUEST_TIMEOUT_MS < MIN_GENERATION_MS;
+    const startedAt = Date.now();
     try {
-      const response = await fetch(OPENROUTER_API_URL, {
-        method: "POST",
-        headers: openRouterHeaders(apiKey),
-        body: requestBody,
-        // ≤120s — Sonnet 5 z adaptive thinking potrafi myśleć kilkanaście-
-        // -kilkadziesiąt sekund przed pisaniem; 90s bywało na styk.
-        signal: AbortSignal.timeout(Math.min(REQUEST_TIMEOUT_MS, remaining)),
-      });
-      const transient = response.status === 429 || response.status >= 500;
-      if (!response.ok && (!transient || isLastAttempt)) {
-        const errorBody = await response.text().catch(() => "");
-        throw new Error(`OpenRouter API error ${response.status}: ${errorBody.slice(0, 500)}`);
+      message = await client.beta.messages
+        .stream(params, { signal: AbortSignal.timeout(Math.min(REQUEST_TIMEOUT_MS, remaining)) })
+        .finalMessage();
+      durationMs = Date.now() - startedAt;
+      responseText = extractResponseText(message.content);
+      if (message.stop_reason === "refusal") {
+        throw new ArticleRefusalError(message.stop_details?.category ?? null);
       }
-      if (response.ok) {
-        data = (await response.json()) as ChatResponse;
-        responseText = data.choices?.[0]?.message?.content || "";
-        if (responseText.trim()) break;
-        if (isLastAttempt) throw new Error("OpenRouter returned an empty completion");
+      if (message.stop_reason === "max_tokens") {
+        throw new NonRetryableError(`Claude: odpowiedź ucięta na max_tokens (${ARTICLE_MAX_TOKENS})`);
       }
+      if (responseText.trim()) break;
+      if (isLastAttempt) throw new Error("Claude returned an empty completion");
     } catch (e) {
-      const isApiError = e instanceof Error && e.message.startsWith("OpenRouter API error");
-      if (isApiError || isLastAttempt) throw e;
+      if (!isRetryable(e) || isLastAttempt) throw e;
     }
     if (isLastAttempt) break;
-    console.warn(`[Writer] OpenRouter transient failure (attempt ${attempt + 1}), retrying in 3s...`);
+    console.warn(`[Writer] Claude transient failure (attempt ${attempt + 1}), retrying in 3s...`);
     await new Promise((r) => setTimeout(r, 3_000));
   }
 
-  if (!data || !responseText.trim()) {
-    throw new Error("OpenRouter request failed after retry");
+  if (!message || !responseText.trim()) {
+    throw new Error("Claude request failed after retry");
   }
 
   // Token usage + cost — w produkcji idą do `pipeline_events` (dashboard
-  // /admin sumuje koszty 7d), w stdout dla local dev.
-  const usage = data.usage;
-  const costUsd = openRouterCostUsd(usage);
-  if (usage) {
-    console.log(
-      `[AI Cost] Tokens — prompt: ${usage.prompt_tokens}, completion: ${usage.completion_tokens} (reasoning: ${usage.completion_tokens_details?.reasoning_tokens ?? "?"}), cost: $${costUsd ?? "?"}`
-    );
-  }
-  if (runId && usage) {
+  // /admin sumuje koszty 7d), w stdout dla local dev. Tokeny thinking są
+  // wliczone w `output_tokens` (API nie podaje ich osobno).
+  const usage = message.usage;
+  const costUsd = claudeCostUsd(usage, model);
+  // Model, który faktycznie napisał tekst (inny niż `model` po fallbacku).
+  const servedBy = message.model;
+  const promptTokens =
+    usage.input_tokens + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
+  console.log(
+    `[AI Cost] ${servedBy} — input: ${promptTokens}, output: ${usage.output_tokens}, ${Math.round(durationMs / 1000)} s, cost: $${costUsd?.toFixed(4) ?? "?"}`
+  );
+  if (runId) {
     await logPipelineEvent(runId, "ai_cost", {
       type: "article",
-      model: ARTICLE_MODEL,
-      prompt_tokens: usage.prompt_tokens,
-      completion_tokens: usage.completion_tokens,
-      reasoning_tokens: usage.completion_tokens_details?.reasoning_tokens,
-      total_tokens: usage.total_tokens,
+      model,
+      served_by: servedBy,
+      effort: ARTICLE_EFFORT,
+      prompt_tokens: promptTokens,
+      completion_tokens: usage.output_tokens,
+      total_tokens: promptTokens + usage.output_tokens,
       cost_usd: costUsd,
+      duration_ms: durationMs,
+      stop_reason: message.stop_reason,
       title: topic,
     });
   }

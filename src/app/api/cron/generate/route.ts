@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { scrapeAllFeeds, selectTopArticles, findRelatedItems, type ScrapedArticle } from "@/lib/scraper/parser";
 import { scrapeSourcePage } from "@/lib/scraper/content";
 import { generateArticle } from "@/lib/ai/writer";
+import { ArticleRefusalError } from "@/lib/ai/claude";
 import { assessArticleQuality, countWords, isLikelyRefusal, QUALITY_PUBLISH_THRESHOLD } from "@/lib/ai/quality";
 import { normalizeTagCandidates, selectTags, tagSlug } from "@/lib/ai/tags";
 import { getArticleThumbnail } from "@/lib/images/generator";
@@ -17,8 +18,10 @@ import slugify from "slugify";
 export const maxDuration = 300;
 export const dynamic = "force-dynamic";
 
-// Vercel Hobby max function duration = 300s. Per-artykuł budget w worst case
-// (scrape 15s + AI 120s + thumbnail AI 90s + DB ops) potrafi sięgać ~230s.
+// maxDuration = 300 s (domyślny limit Vercel; plan Pro pozwala do 800 s —
+// furtka przy zwiększaniu wolumenu). Typowo artykuł na Opus 5.5 to ~45–60 s
+// generacji; worst case per artykuł (scrape 15s + AI 150s + thumbnail AI
+// 90s + DB ops) potrafi sięgać ~260s.
 // Bez time-budget guard pętla potrafi zostać cięta w połowie iteracji,
 // zostawiając stan w nieprzewidywalnym miejscu (insert mógł przejść, ale
 // tagi już nie). Po przekroczeniu BUDGET_MS przerywamy pętlę gracefully —
@@ -455,6 +458,22 @@ async function runPipeline(request: NextRequest) {
           tags_linked: tagResult.linked,
         });
       } catch (error) {
+        // Odmowa klasyfikatora Claude (`stop_reason: "refusal"`, także po
+        // fallbacku) = odmowa AI: oznaczamy źródło jako przetworzone, bo
+        // ponowienie w kolejnym cronie dałoby tę samą odmowę i ten sam koszt.
+        if (error instanceof ArticleRefusalError) {
+          console.warn(`[Pipeline] Claude refused "${item.title}" (${error.category ?? "no category"}), skipping`);
+          failed.push({ title: item.title, reason: "ai-refusal" });
+          await logPipelineEvent(runId, "ai_refusal", {
+            title: item.title,
+            url: item.url,
+            source_name: item.sourceName,
+            stop_reason: "refusal",
+            category: error.category,
+          });
+          await markProcessed(supabase, [item]);
+          continue;
+        }
         console.error(`Failed to generate article for "${item.title}":`, error);
         failed.push({ title: item.title, reason: String(error) });
         await logPipelineEvent(runId, "article_failed", {

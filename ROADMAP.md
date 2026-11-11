@@ -1,8 +1,8 @@
 # AiFeed — Roadmapa: wdrożenie, decyzje, SEO, rozwój i monetyzacja
 
-> **Status:** wersja 3.0 · 2026-10-28
-> **Stan serwisu:** 1905 opublikowanych artykułów · 2618 tagów · pipeline 3×3/dzień na Claude Sonnet 5 · 22 źródła RSS · ruch rośnie
-> **Stan kodu:** po audycie i refaktoryzacji 2026-10-28 (§1) — Next 16.4.3, 0 podatności produkcyjnych, 131 testów, CI · wdrożone 2026-10-28 · baza: migracje 001 → 007 wgrane
+> **Status:** wersja 3.1 · 2026-11-11
+> **Stan serwisu:** ~1930 opublikowanych artykułów · 2618 tagów · pipeline 3×3/dzień na **Claude Opus 5.5 (API Anthropic)** · 22 źródła RSS · ruch rośnie · **przestój 2026-11-01 → 11-11** (wyczerpane kredyty OpenRouter, §9)
+> **Stan kodu:** po audycie i refaktoryzacji 2026-10-28 (§1) — Next 16.4.3, 0 podatności produkcyjnych, 140 testów, CI · baza: migracje 001 → 007 wgrane
 
 To jest **kanoniczny dokument planowania**. `README.md` opisuje stan obecny (architektura, uruchomienie), ten plik — co zrobić, w jakiej kolejności i dlaczego. Punkty oznaczone **[DECYZJA]** czekają na Twoją decyzję; przy każdym jest rekomendacja.
 
@@ -25,7 +25,7 @@ To jest **kanoniczny dokument planowania**. `README.md` opisuje stan obecny (arc
 
 ## 0. Do zrobienia teraz
 
-Kolejność ma znaczenie. 0.1–0.4 wykonane 2026-10-28 (w 0.4 zostaje kontrola raportu „Strony" za kilka dni). Reszta to praca ręczna w panelach, ~30 minut.
+Kolejność ma znaczenie. 0.1–0.4 wykonane 2026-10-28 (w 0.4 zostaje kontrola raportu „Strony" za kilka dni); 0.7–0.8 doszły po przestoju pipeline'u 2026-11-01 → 11-11. Reszta to praca ręczna w panelach, ~30 minut (0.7 to mała zmiana w kodzie).
 
 | # | Co | Dlaczego to P0 |
 |---|---|---|
@@ -37,6 +37,8 @@ Kolejność ma znaczenie. 0.1–0.4 wykonane 2026-10-28 (w 0.4 zostaje kontrola 
 | 0.4 | ✅ Sitemapy przesłane 2026-10-28. **Google Search Console**: Sitemapy → ponownie prześlij `sitemap.xml` (teraz ~1910 URL-i) i `news-sitemap.xml`; Indeksowanie stron → sprawdź „Soft 404" (powinny zniknąć — nieistniejące artykuły zwracają już prawdziwe 404) | Szybsze wciągnięcie 541 brakujących artykułów |
 | 0.5 | **[DECYZJA] Zgody na cookies (D1)** — przeczytaj §3 | GA4 działa dziś bez zgody użytkownika; to ryzyko prawne (PKE) i twardy wymóg przed jakąkolwiek reklamą |
 | 0.6 | Rotacja kluczy `SUPABASE_SERVICE_ROLE_KEY` i `OPENROUTER_API_KEY`, **jeśli** nie zrobiłeś tego po wycieku z maja. Dodatkowo **token MailerLite** (był wklejony w rozmowie z asystentem): MailerLite → Integrations → API → nowy token → Vercel `MAILERLITE_API_TOKEN` → redeploy → usuń stary | Jedyny niezamknięty punkt P0 ze starego audytu |
+| 0.7 | **Alert o martwym pipelinie** — przestój 01.11–11.11 (402 z OpenRouter na każdym runie) wyszedł na jaw dopiero po 10 dniach. Rekomendacja: darmowy monitor heartbeat (np. Healthchecks.io / Better Stack) — pipeline pinguje URL z env po runie z ≥1 opublikowanym artykułem; brak pingu przez 24 h = e-mail. ~20 linii kodu + 1 zmienna env. Trigger 7.13 („Vercel Pro") jest już spełniony | Każdy dzień przestoju to ~9 niewydanych artykułów i utrata świeżości w Google News/Discover |
+| 0.8 | **Limit wydatków Claude API** — Claude Console → Settings → Limits: miesięczny limit (np. 100 $) + alert e-mail przy ~70%. Realny koszt: ~0,13 $/artykuł ≈ 35 $/mies. przy 9/dzień (D5) | Pętla błędów albo zmiana wolumenu nie przepali budżetu po cichu; przy wyczerpaniu limitu pipeline staje — dlatego razem z 0.7 |
 
 ---
 
@@ -168,6 +170,8 @@ Stan (14 dni): 117 artykułów, średnio 801 słów, quality score śr. 99,9 (br
 - **A (rekomendowane):** zostać przy Sonnet 5 i 9/dzień; po tygodniu z poprawnym logowaniem kosztów (od tej wersji) policzyć realny koszt/artykuł; nadwyżkę budżetu przeznaczyć na **weryfikację faktów** (§5.1), nie na droższy model.
 - B: Opus 5 dla artykułów z syntezą ≥2 źródeł (najbardziej wymagające) — ~2,5× koszt tych tekstów.
 - C: zwiększenie wolumenu — **nie teraz** (profil scaled content; najpierw sygnały jakości z GSC).
+
+✅ **Decyzja 2026-11-11:** OpenRouter wyczerpał kredyty → przejście na **API Claude** (budżet właściciela 100 $/mies.) z modelem **Claude Opus 5.5** (`effort: high`). Koszt na Sonnet 5 (30 dni, 160 artykułów): śr. 10,7 tys. tokenów wejścia, 3,5 tys. wyjścia, **0,056 $/artykuł**. Opus 5.5 w próbie: ~0,13 $/artykuł, ~45 s generacji → **~35 $/mies.** przy 9/dzień — 1/3 budżetu. Powrót do tańszego modelu bez zmiany kodu: env `CLAUDE_ARTICLE_MODEL=claude-sonnet-5-5` (~połowa kosztu) + redeploy. Wolumen (C) — dalej po sygnałach jakości z GSC; przy zwiększaniu: `maxDuration` do 800 s (Pro) albo Vercel Queues (7.6), bo 3 artykuły na Opusie zajmują ~150–200 s z 270 s budżetu.
 
 ### D6. Źródła RSS
 
@@ -335,6 +339,7 @@ Szczegóły w `git log`. Najważniejsze etapy:
 - **2026-08-11 — SEO i jakość:** linkowanie wewnętrzne z whitelistą slugów, `news-sitemap.xml`, IndexNow, Preferred Sources, `/o-serwisie` jako strona transparentności, `/redakcja` (nazwisko firmuje serwis, nie artykuły), model **Claude Sonnet 5**, prompt 700–1200 słów z „Co to oznacza dla Polski", synteza wielu źródeł, tagi 3-stopniowe, wolumen 3×3/dzień, home „najnowsze na górze".
 - **2026-08-12 — UX/brand:** favicon i ikony z glifów logo (light/dark), paginacja tagów, aktywny pill kategorii po hydratacji, fallback `popular_tags` stronicowany.
 - **2026-10-28 — audyt i refaktoryzacja** (§1).
+- **2026-11-01 → 11-11 — przestój pipeline'u:** od runu 2026-11-01 17:00 UTC każde wywołanie OpenRouter kończyło się `402` (brak kredytów) — 0 artykułów przez 10 dni, nikt nie dostał alertu (→ 0.7). **2026-11-11:** artykuły przepięte na API Claude (`@anthropic-ai/sdk`, Claude Opus 5.5, D5); OpenRouter zostaje tylko dla miniatur AI.
 
 ---
 

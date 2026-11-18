@@ -77,6 +77,9 @@ const nextConfig: NextConfig = {
   reactCompiler: true,
   // Nie ogłaszamy frameworka w każdej odpowiedzi (`x-powered-by: Next.js`).
   poweredByHeader: false,
+  experimental: {
+    agentUpgrade: "security",
+  },
   images: {
     // Optymalizacja jest sterowana per-obraz w `components/ui/thumbnail.tsx`:
     // przez `/_next/image` idą WYŁĄCZNIE miniatury z naszego Supabase Storage
